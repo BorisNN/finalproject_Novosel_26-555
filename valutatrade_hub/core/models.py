@@ -3,6 +3,7 @@
 from datetime import datetime
 import hashlib
 import secrets
+from typing import Dict
 
 
 class User:
@@ -17,7 +18,7 @@ class User:
         registration_date: datetime,
     ) -> None:
         self._user_id = user_id
-        self.username = username         
+        self.username = username
         self._hashed_password = hashed_password
         self._salt = salt
         self._registration_date = registration_date
@@ -65,7 +66,6 @@ class User:
         if not new_password or len(new_password) < 4:
             raise ValueError("Пароль должен быть не короче 4 символов")
 
-        # Новая соль на каждый смену пароля
         self._salt = secrets.token_hex(16)
         self._hashed_password = self._hash_password(new_password, self._salt)
 
@@ -86,11 +86,10 @@ class Wallet:
     """Кошелёк одной конкретной валюты."""
 
     def __init__(self, currency_code: str, balance: float = 0.0) -> None:
-        # Код валюты приводим к верхнему регистру и проверяем, что он не пустой
         if not currency_code or not currency_code.strip():
             raise ValueError("Код валюты не может быть пустым")
         self._currency_code = currency_code.strip().upper()
-        self.balance = balance          # сразу через сеттер
+        self.balance = balance
 
     @property
     def currency_code(self) -> str:
@@ -102,7 +101,6 @@ class Wallet:
 
     @balance.setter
     def balance(self, value: float) -> None:
-        # Не пускаем отрицательные значения и нечисловые типы
         if not isinstance(value, (int, float)):
             raise ValueError("Баланс должен быть числом")
         if value < 0:
@@ -129,3 +127,67 @@ class Wallet:
     def get_balance_info(self) -> str:
         """Коротко показывает, сколько сейчас на кошельке."""
         return f"{self.currency_code}: {self.balance:.4f}"
+
+
+class Portfolio:
+    """Портфель пользователя — набор кошельков разных валют."""
+
+    # Временные фиксированные курсы (пока нет парсера).
+    # Ключ — "FROM_TO", значение — сколько единиц TO даёт 1 единица FROM.
+    # Пример: 1 BTC = 60000 USD, 1 EUR = 1.08 USD.
+    _FAKE_RATES: Dict[str, float] = {
+        "BTC_USD": 60000.0,
+        "ETH_USD": 3500.0,
+        "EUR_USD": 1.08,
+        "RUB_USD": 0.011,
+        "USD_USD": 1.0,
+    }
+
+    def __init__(self, user_id: int) -> None:
+        self._user_id = user_id
+        self._wallets: Dict[str, Wallet] = {}
+
+    @property
+    def user_id(self) -> int:
+        return self._user_id
+
+    @property
+    def wallets(self) -> Dict[str, Wallet]:
+        # Возвращаем копию, чтобы снаружи не ломали внутренний словарь
+        return self._wallets.copy()
+
+    def add_currency(self, currency_code: str) -> Wallet:
+        """Добавляет новый кошелёк, если такой валюты ещё нет."""
+        if not currency_code or not currency_code.strip():
+            raise ValueError("Код валюты не может быть пустым")
+        code = currency_code.strip().upper()
+        if code in self._wallets:
+            raise ValueError(f"Кошелёк {code} уже есть в портфеле")
+        wallet = Wallet(code, 0.0)
+        self._wallets[code] = wallet
+        return wallet
+
+    def get_wallet(self, currency_code: str) -> Wallet | None:
+        """Возвращает кошелёк по коду валюты или None, если его нет."""
+        if not currency_code:
+            return None
+        return self._wallets.get(currency_code.strip().upper())
+
+    def get_total_value(self, base_currency: str = "USD") -> float:
+        """Считает общую стоимость всех кошельков в базовой валюте."""
+        base = base_currency.strip().upper() if base_currency else "USD"
+        total = 0.0
+
+        for code, wallet in self._wallets.items():
+            if wallet.balance == 0:
+                continue
+            # Курс вида CODE_BASE
+            rate_key = f"{code}_{base}"
+            rate = self._FAKE_RATES.get(rate_key)
+            if rate is None:
+                # Если прямого курса нет — пока просто пропускаем
+                # (позже подключим нормальный сервис курсов)
+                continue
+            total += wallet.balance * rate
+
+        return total
