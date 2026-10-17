@@ -80,3 +80,52 @@ class User:
         """Простой односторонний хеш: SHA-256 от password + salt."""
         data = (password + salt).encode("utf-8")
         return hashlib.sha256(data).hexdigest()
+
+
+class Wallet:
+    """Кошелёк одной конкретной валюты."""
+
+    def __init__(self, currency_code: str, balance: float = 0.0) -> None:
+        # Код валюты приводим к верхнему регистру и проверяем, что он не пустой
+        if not currency_code or not currency_code.strip():
+            raise ValueError("Код валюты не может быть пустым")
+        self._currency_code = currency_code.strip().upper()
+        self.balance = balance          # сразу через сеттер
+
+    @property
+    def currency_code(self) -> str:
+        return self._currency_code
+
+    @property
+    def balance(self) -> float:
+        return self._balance
+
+    @balance.setter
+    def balance(self, value: float) -> None:
+        # Не пускаем отрицательные значения и нечисловые типы
+        if not isinstance(value, (int, float)):
+            raise ValueError("Баланс должен быть числом")
+        if value < 0:
+            raise ValueError("Баланс не может быть отрицательным")
+        self._balance = float(value)
+
+    def deposit(self, amount: float) -> None:
+        """Пополняет баланс. Сумма должна быть положительной."""
+        if not isinstance(amount, (int, float)) or amount <= 0:
+            raise ValueError("Сумма пополнения должна быть положительным числом")
+        self.balance += amount
+
+    def withdraw(self, amount: float) -> None:
+        """Снимает деньги, если их хватает."""
+        if not isinstance(amount, (int, float)) or amount <= 0:
+            raise ValueError("Сумма снятия должна быть положительным числом")
+        if amount > self.balance:
+            raise ValueError(
+                f"Недостаточно средств: доступно {self.balance:.4f} {self.currency_code}, "
+                f"требуется {amount:.4f}"
+            )
+        self.balance -= amount
+
+    def get_balance_info(self) -> str:
+        """Коротко показывает, сколько сейчас на кошельке."""
+        return f"{self.currency_code}: {self.balance:.4f}"
