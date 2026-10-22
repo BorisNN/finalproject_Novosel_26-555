@@ -211,3 +211,37 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
         f"- {code}: было {old_balance:.4f} → стало {wallet.balance:.4f}\n"
         f"Оценочная выручка: {revenue:.2f} USD"
     )
+
+def get_rate(from_currency: str, to_currency: str) -> str:
+    """
+    Возвращает курс одной валюты к другой.
+    Пока берёт значения из фиксированного словаря Portfolio._FAKE_RATES.
+    """
+    if not from_currency or not to_currency:
+        raise ValueError("Нужно указать обе валюты")
+
+    from_code = from_currency.strip().upper()
+    to_code = to_currency.strip().upper()
+
+    # Прямой курс
+    direct_key = f"{from_code}_{to_code}"
+    rate = Portfolio._FAKE_RATES.get(direct_key)
+
+    # Обратный курс
+    reverse_key = f"{to_code}_{from_code}"
+    reverse_rate = Portfolio._FAKE_RATES.get(reverse_key)
+
+    if rate is None and reverse_rate is None:
+        raise ValueError(f"Курс {from_code}→{to_code} недоступен. Повторите попытку позже.")
+
+    if rate is None and reverse_rate is not None:
+        rate = 1.0 / reverse_rate
+
+    if reverse_rate is None and rate is not None:
+        reverse_rate = 1.0 / rate
+
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    return (
+        f"Курс {from_code}→{to_code}: {rate:.8f} (обновлено: {now})\n"
+        f"Обратный курс {to_code}→{from_code}: {reverse_rate:.2f}"
+    )
