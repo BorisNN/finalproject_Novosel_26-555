@@ -14,6 +14,7 @@ from ..core.usecases import (
     update_rate,
 )
 from ..core.models import User
+from ..parser_service.fetcher import fetch_and_update_rates
 
 
 # Текущая сессия (пока просто переменная в памяти)
@@ -138,6 +139,9 @@ def handle_command(line: str) -> str:
                 return "'rate' должен быть числом"
             return update_rate(from_cur, to_cur, new_rate)
 
+        elif cmd == "update-rates":
+            return fetch_and_update_rates()
+
         elif cmd in ("exit", "quit"):
             return "exit"
 
@@ -154,7 +158,9 @@ def handle_command(line: str) -> str:
                 "  get-rate --from CODE --to CODE\n"
                 "  show-rates\n"
                 "  update-rate --from CODE --to CODE --rate NUMBER\n"
+                "  update-rates\n"
                 "  exit"
+                
             )
 
         else:

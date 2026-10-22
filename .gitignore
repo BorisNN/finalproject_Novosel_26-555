@@ -15,3 +15,4 @@ build/
 data/*.json
 !data/.gitkeep
 .DS_Store
+.env
