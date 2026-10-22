@@ -64,11 +64,31 @@ def handle_command(line: str) -> str:
             current_user = user
             return f"Вы вошли как '{user.username}'"
 
+        elif cmd == "logout":
+            if current_user is None:
+                return "Вы и так не вошли в систему"
+            name = current_user.username
+            current_user = None
+            return f"Вы вышли из аккаунта '{name}'"
+
         elif cmd == "show-portfolio":
             if current_user is None:
                 return "Сначала выполните login"
             base = args.get("base", "USD")
             return show_portfolio(current_user, base)
+
+        elif cmd == "deposit":
+            if current_user is None:
+                return "Сначала выполните login"
+            currency = args.get("currency", "")
+            amount_str = args.get("amount", "")
+            if not amount_str:
+                return "Нужно указать --amount"
+            try:
+                amount = float(amount_str)
+            except ValueError:
+                return "'amount' должен быть числом"
+            return deposit(current_user, currency, amount)
 
         elif cmd == "buy":
             if current_user is None:
@@ -96,19 +116,6 @@ def handle_command(line: str) -> str:
                 return "'amount' должен быть числом"
             return sell_currency(current_user, currency, amount)
 
-        elif cmd == "deposit":
-            if current_user is None:
-                return "Сначала выполните login"
-            currency = args.get("currency", "")
-            amount_str = args.get("amount", "")
-            if not amount_str:
-                return "Нужно указать --amount"
-            try:
-                amount = float(amount_str)
-            except ValueError:
-                return "'amount' должен быть числом"
-            return deposit(current_user, currency, amount)
-
         elif cmd == "get-rate":
             from_cur = args.get("from", "")
             to_cur = args.get("to", "")
@@ -122,6 +129,7 @@ def handle_command(line: str) -> str:
                 "Доступные команды:\n"
                 "  register --username NAME --password PASS\n"
                 "  login --username NAME --password PASS\n"
+                "  logout\n"
                 "  show-portfolio [--base USD]\n"
                 "  deposit --currency CODE --amount NUMBER\n"
                 "  buy --currency CODE --amount NUMBER\n"
@@ -143,8 +151,10 @@ def run() -> None:
     """Запускает цикл чтения команд."""
     print("ValutaTrade Hub. Напишите help для списка команд.")
     while True:
+        # Показываем, кто сейчас залогинен
+        prompt = f"{current_user.username}> " if current_user else "> "
         try:
-            line = input("> ")
+            line = input(prompt)
         except (EOFError, KeyboardInterrupt):
             print()
             break
