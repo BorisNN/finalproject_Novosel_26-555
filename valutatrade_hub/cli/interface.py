@@ -10,6 +10,8 @@ from ..core.usecases import (
     sell_currency,
     get_rate,
     deposit,
+    show_rates,
+    update_rate,
 )
 from ..core.models import User
 
@@ -121,6 +123,21 @@ def handle_command(line: str) -> str:
             to_cur = args.get("to", "")
             return get_rate(from_cur, to_cur)
 
+        elif cmd == "show-rates":
+            return show_rates()
+
+        elif cmd == "update-rate":
+            from_cur = args.get("from", "")
+            to_cur = args.get("to", "")
+            rate_str = args.get("rate", "")
+            if not rate_str:
+                return "Нужно указать --rate"
+            try:
+                new_rate = float(rate_str)
+            except ValueError:
+                return "'rate' должен быть числом"
+            return update_rate(from_cur, to_cur, new_rate)
+
         elif cmd in ("exit", "quit"):
             return "exit"
 
@@ -135,6 +152,8 @@ def handle_command(line: str) -> str:
                 "  buy --currency CODE --amount NUMBER\n"
                 "  sell --currency CODE --amount NUMBER\n"
                 "  get-rate --from CODE --to CODE\n"
+                "  show-rates\n"
+                "  update-rate --from CODE --to CODE --rate NUMBER\n"
                 "  exit"
             )
 

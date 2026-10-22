@@ -307,3 +307,80 @@ def deposit(user: User, currency: str, amount: float) -> str:
         f"Пополнение выполнено: +{amount:.4f} {code}\n"
         f"{code}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
     )
+
+def deposit(user: User, currency: str, amount: float) -> str:
+    """
+    Пополняет кошелёк указанной валюты.
+    Если кошелька нет — создаёт его.
+    """
+    if user is None:
+        raise ValueError("Сначала выполните login")
+    if not currency or not currency.strip():
+        raise ValueError("Нужно указать код валюты")
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        raise ValueError("'amount' должен быть положительным числом")
+
+    code = currency.strip().upper()
+    portfolio = load_portfolio(user.user_id)
+
+    wallet = portfolio.get_wallet(code)
+    if wallet is None:
+        wallet = portfolio.add_currency(code)
+
+    old_balance = wallet.balance
+    wallet.deposit(amount)
+    save_portfolio(portfolio)
+
+    return (
+        f"Пополнение выполнено: +{amount:.4f} {code}\n"
+        f"{code}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
+    )
+
+
+def show_rates() -> str:
+    """Показывает все курсы из rates.json."""
+    rates = load_rates()
+    if not rates:
+        return "Курсы не загружены."
+
+    lines = ["Текущие курсы:"]
+    for key, value in rates.items():
+        if key in ("source", "last_refresh"):
+            continue
+        if isinstance(value, dict) and "rate" in value:
+            updated = value.get("updated_at", "неизвестно")
+            lines.append(f"- {key}: {value['rate']} (обновлено: {updated})")
+
+    source = rates.get("source", "неизвестно")
+    last = rates.get("last_refresh", "неизвестно")
+    lines.append(f"Источник: {source}")
+    lines.append(f"Последнее обновление: {last}")
+    return "\n".join(lines)
+
+
+def update_rate(from_currency: str, to_currency: str, new_rate: float) -> str:
+    """
+    Вручную обновляет один курс в rates.json.
+    Пока это заглушка — позже её заменит парсер.
+    """
+    if not from_currency or not to_currency:
+        raise ValueError("Нужно указать обе валюты")
+    if not isinstance(new_rate, (int, float)) or new_rate <= 0:
+        raise ValueError("Курс должен быть положительным числом")
+
+    from_code = from_currency.strip().upper()
+    to_code = to_currency.strip().upper()
+    key = f"{from_code}_{to_code}"
+
+    rates = load_rates()
+    now = datetime.now().isoformat(timespec="seconds")
+
+    rates[key] = {
+        "rate": float(new_rate),
+        "updated_at": now,
+    }
+    rates["source"] = "manual"
+    rates["last_refresh"] = now
+
+    save_rates(rates)
+    return f"Курс {key} обновлён: {new_rate} (время: {now})"
