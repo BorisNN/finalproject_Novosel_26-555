@@ -47,3 +47,41 @@ def register_user(username: str, password: str) -> str:
     save_portfolios(portfolios)
 
     return f"Пользователь '{username}' зарегистрирован (id={user_id}). Войдите: login --username {username} --password ****"
+
+
+def _user_from_dict(data: dict) -> User:
+    """Собирает объект User из словаря, который лежит в users.json."""
+    reg_date = datetime.fromisoformat(data["registration_date"])
+    return User(
+        user_id=data["user_id"],
+        username=data["username"],
+        hashed_password=data["hashed_password"],
+        salt=data["salt"],
+        registration_date=reg_date,
+    )
+
+
+def login_user(username: str, password: str) -> User:
+    """
+    Проверяет имя и пароль.
+    Возвращает объект User при успехе или бросает ValueError.
+    """
+    username = username.strip() if username else ""
+    if not username or not password:
+        raise ValueError("Нужно указать имя пользователя и пароль")
+
+    users = load_users()
+    found = None
+    for u in users:
+        if u.get("username", "").lower() == username.lower():
+            found = u
+            break
+
+    if found is None:
+        raise ValueError(f"Пользователь '{username}' не найден")
+
+    user = _user_from_dict(found)
+    if not user.verify_password(password):
+        raise ValueError("Неверный пароль")
+
+    return user
