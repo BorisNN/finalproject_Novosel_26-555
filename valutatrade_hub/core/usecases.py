@@ -3,7 +3,7 @@
 from datetime import datetime
 import secrets
 
-from .models import User, Portfolio
+from .models import User, Portfolio, Wallet
 from .utils import load_users, save_users, load_portfolios, save_portfolios
 
 
@@ -85,3 +85,48 @@ def login_user(username: str, password: str) -> User:
         raise ValueError("Неверный пароль")
 
     return user
+
+
+def load_portfolio(user_id: int) -> Portfolio:
+    """Загружает портфель пользователя из JSON и собирает объекты Wallet."""
+    portfolios = load_portfolios()
+    for p in portfolios:
+        if p.get("user_id") == user_id:
+            portfolio = Portfolio(user_id)
+            wallets_data = p.get("wallets", {})
+            for code, w_data in wallets_data.items():
+                balance = w_data.get("balance", 0.0)
+                wallet = Wallet(code, balance)
+                portfolio._wallets[code] = wallet
+            return portfolio
+    # Если портфеля нет — создаём пустой
+    return Portfolio(user_id)
+
+
+def show_portfolio(user: User, base_currency: str = "USD") -> str:
+    """
+    Формирует текстовое представление портфеля.
+    Если кошельков нет — говорит об этом.
+    """
+    if user is None:
+        raise ValueError("Сначала выполните login")
+
+    portfolio = load_portfolio(user.user_id)
+    base = base_currency.strip().upper() if base_currency else "USD"
+
+    if not portfolio.wallets:
+        return f"Портфель пользователя '{user.username}' пуст. Купите валюту командой buy."
+
+    lines = [f"Портфель пользователя '{user.username}' (база: {base}):"]
+    total = portfolio.get_total_value(base)
+
+    for code, wallet in sorted(portfolio.wallets.items()):
+        # Считаем стоимость этого кошелька отдельно
+        rate_key = f"{code}_{base}"
+        rate = Portfolio._FAKE_RATES.get(rate_key, 0.0)
+        value = wallet.balance * rate
+        lines.append(f"- {code}: {wallet.balance:.4f} → {value:.2f} {base}")
+
+    lines.append("---------------------------------")
+    lines.append(f"ИТОГО: {total:.2f} {base}")
+    return "\n".join(lines)
