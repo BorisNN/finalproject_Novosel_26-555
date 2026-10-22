@@ -10,7 +10,7 @@ from .utils import load_users, save_users, load_portfolios, save_portfolios
 def register_user(username: str, password: str) -> str:
     """
     Регистрирует нового пользователя.
-    Возвращает сообщение об успехе или бросает ValueError.
+    Создаёт пустой портфель.
     """
     username = username.strip() if username else ""
     if not username:
@@ -38,12 +38,15 @@ def register_user(username: str, password: str) -> str:
     users.append(user_data)
     save_users(users)
 
+    # Пустой портфель, как в задании
     portfolios = load_portfolios()
     portfolios.append({"user_id": user_id, "wallets": {}})
     save_portfolios(portfolios)
 
-    return f"Пользователь '{username}' зарегистрирован (id={user_id}). Войдите: login --username {username} --password ****"
-
+    return (
+        f"Пользователь '{username}' зарегистрирован (id={user_id}). "
+        f"Войдите: login --username {username} --password ****"
+    )
 
 def _user_from_dict(data: dict) -> User:
     """Собирает объект User из словаря, который лежит в users.json."""
@@ -147,7 +150,7 @@ def show_portfolio(user: User, base_currency: str = "USD") -> str:
 def buy_currency(user: User, currency: str, amount: float) -> str:
     """
     Покупает указанное количество валюты.
-    Пока просто добавляет на кошелёк (без списания USD — это добавим позже, когда будет полноценный обмен).
+    Списывает эквивалент в USD с кошелька USD.
     """
     if user is None:
         raise ValueError("Сначала выполните login")
@@ -157,32 +160,52 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
         raise ValueError("'amount' должен быть положительным числом")
 
     code = currency.strip().upper()
+    if code == "USD":
+        raise ValueError("Нельзя купить USD за USD")
+
     portfolio = load_portfolio(user.user_id)
 
+    # Курс CODE → USD
+    rate = Portfolio._FAKE_RATES.get(f"{code}_USD")
+    if rate is None or rate <= 0:
+        raise ValueError(f"Не удалось получить курс для {code}→USD")
+
+    cost = amount * rate
+
+    # Кошелёк USD должен существовать и иметь достаточно средств
+    usd_wallet = portfolio.get_wallet("USD")
+    if usd_wallet is None or usd_wallet.balance < cost:
+        available = usd_wallet.balance if usd_wallet else 0.0
+        raise ValueError(
+            f"Недостаточно USD: доступно {available:.2f}, требуется {cost:.2f}"
+        )
+
+    # Создаём кошелёк покупаемой валюты, если его нет
     wallet = portfolio.get_wallet(code)
     if wallet is None:
         wallet = portfolio.add_currency(code)
 
     old_balance = wallet.balance
+    old_usd = usd_wallet.balance
+
+    # Списываем USD и начисляем валюту
+    usd_wallet.withdraw(cost)
     wallet.deposit(amount)
     save_portfolio(portfolio)
-
-    # Оценочная стоимость по фиксированному курсу
-    rate = Portfolio._FAKE_RATES.get(f"{code}_USD", 0.0)
-    cost = amount * rate
 
     return (
         f"Покупка выполнена: {amount:.4f} {code} по курсу {rate:.2f} USD/{code}\n"
         f"Изменения в портфеле:\n"
         f"- {code}: было {old_balance:.4f} → стало {wallet.balance:.4f}\n"
-        f"Оценочная стоимость покупки: {cost:.2f} USD"
+        f"- USD: было {old_usd:.2f} → стало {usd_wallet.balance:.2f}\n"
+        f"Стоимость покупки: {cost:.2f} USD"
     )
 
 
 def sell_currency(user: User, currency: str, amount: float) -> str:
     """
     Продаёт указанное количество валюты.
-    Пока просто снимает с кошелька (зачисление USD добавим позже).
+    Зачисляет эквивалент в USD на кошелёк USD.
     """
     if user is None:
         raise ValueError("Сначала выполните login")
@@ -192,24 +215,43 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
         raise ValueError("'amount' должен быть положительным числом")
 
     code = currency.strip().upper()
+    if code == "USD":
+        raise ValueError("Нельзя продать USD за USD")
+
     portfolio = load_portfolio(user.user_id)
 
     wallet = portfolio.get_wallet(code)
     if wallet is None:
-        raise ValueError(f"У вас нет кошелька '{code}'. Добавьте валюту: она создаётся автоматически при первой покупке.")
+        raise ValueError(
+            f"У вас нет кошелька '{code}'. "
+            "Добавьте валюту: она создаётся автоматически при первой покупке."
+        )
 
-    old_balance = wallet.balance
-    wallet.withdraw(amount)  # сам проверит, хватает ли
-    save_portfolio(portfolio)
+    rate = Portfolio._FAKE_RATES.get(f"{code}_USD")
+    if rate is None or rate <= 0:
+        raise ValueError(f"Не удалось получить курс для {code}→USD")
 
-    rate = Portfolio._FAKE_RATES.get(f"{code}_USD", 0.0)
     revenue = amount * rate
+    old_balance = wallet.balance
+
+    # Снимаем валюту (проверка достаточности внутри withdraw)
+    wallet.withdraw(amount)
+
+    # Кошелёк USD создаём при необходимости
+    usd_wallet = portfolio.get_wallet("USD")
+    if usd_wallet is None:
+        usd_wallet = portfolio.add_currency("USD")
+    old_usd = usd_wallet.balance
+    usd_wallet.deposit(revenue)
+
+    save_portfolio(portfolio)
 
     return (
         f"Продажа выполнена: {amount:.4f} {code} по курсу {rate:.2f} USD/{code}\n"
         f"Изменения в портфеле:\n"
         f"- {code}: было {old_balance:.4f} → стало {wallet.balance:.4f}\n"
-        f"Оценочная выручка: {revenue:.2f} USD"
+        f"- USD: было {old_usd:.2f} → стало {usd_wallet.balance:.2f}\n"
+        f"Выручка: {revenue:.2f} USD"
     )
 
 def get_rate(from_currency: str, to_currency: str) -> str:
@@ -244,4 +286,32 @@ def get_rate(from_currency: str, to_currency: str) -> str:
     return (
         f"Курс {from_code}→{to_code}: {rate:.8f} (обновлено: {now})\n"
         f"Обратный курс {to_code}→{from_code}: {reverse_rate:.2f}"
+    )
+
+def deposit(user: User, currency: str, amount: float) -> str:
+    """
+    Пополняет кошелёк указанной валюты.
+    Если кошелька нет — создаёт его.
+    """
+    if user is None:
+        raise ValueError("Сначала выполните login")
+    if not currency or not currency.strip():
+        raise ValueError("Нужно указать код валюты")
+    if not isinstance(amount, (int, float)) or amount <= 0:
+        raise ValueError("'amount' должен быть положительным числом")
+
+    code = currency.strip().upper()
+    portfolio = load_portfolio(user.user_id)
+
+    wallet = portfolio.get_wallet(code)
+    if wallet is None:
+        wallet = portfolio.add_currency(code)
+
+    old_balance = wallet.balance
+    wallet.deposit(amount)
+    save_portfolio(portfolio)
+
+    return (
+        f"Пополнение выполнено: +{amount:.4f} {code}\n"
+        f"{code}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
     )

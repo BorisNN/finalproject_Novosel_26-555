@@ -9,6 +9,7 @@ from ..core.usecases import (
     buy_currency,
     sell_currency,
     get_rate,
+    deposit,
 )
 from ..core.models import User
 
@@ -73,8 +74,11 @@ def handle_command(line: str) -> str:
             if current_user is None:
                 return "Сначала выполните login"
             currency = args.get("currency", "")
+            amount_str = args.get("amount", "")
+            if not amount_str:
+                return "Нужно указать --amount"
             try:
-                amount = float(args.get("amount", "0"))
+                amount = float(amount_str)
             except ValueError:
                 return "'amount' должен быть числом"
             return buy_currency(current_user, currency, amount)
@@ -83,11 +87,27 @@ def handle_command(line: str) -> str:
             if current_user is None:
                 return "Сначала выполните login"
             currency = args.get("currency", "")
+            amount_str = args.get("amount", "")
+            if not amount_str:
+                return "Нужно указать --amount"
             try:
-                amount = float(args.get("amount", "0"))
+                amount = float(amount_str)
             except ValueError:
                 return "'amount' должен быть числом"
             return sell_currency(current_user, currency, amount)
+
+        elif cmd == "deposit":
+            if current_user is None:
+                return "Сначала выполните login"
+            currency = args.get("currency", "")
+            amount_str = args.get("amount", "")
+            if not amount_str:
+                return "Нужно указать --amount"
+            try:
+                amount = float(amount_str)
+            except ValueError:
+                return "'amount' должен быть числом"
+            return deposit(current_user, currency, amount)
 
         elif cmd == "get-rate":
             from_cur = args.get("from", "")
@@ -103,6 +123,7 @@ def handle_command(line: str) -> str:
                 "  register --username NAME --password PASS\n"
                 "  login --username NAME --password PASS\n"
                 "  show-portfolio [--base USD]\n"
+                "  deposit --currency CODE --amount NUMBER\n"
                 "  buy --currency CODE --amount NUMBER\n"
                 "  sell --currency CODE --amount NUMBER\n"
                 "  get-rate --from CODE --to CODE\n"
