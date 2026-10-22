@@ -4,7 +4,10 @@ from datetime import datetime
 import secrets
 
 from .models import User, Portfolio, Wallet
-from .utils import load_users, save_users, load_portfolios, save_portfolios
+from .utils import (
+    load_users, save_users, load_portfolios, save_portfolios,
+    load_rates, save_rates, get_rate_value,
+)
 
 
 def register_user(username: str, password: str) -> str:
@@ -47,6 +50,7 @@ def register_user(username: str, password: str) -> str:
         f"Пользователь '{username}' зарегистрирован (id={user_id}). "
         f"Войдите: login --username {username} --password ****"
     )
+
 
 def _user_from_dict(data: dict) -> User:
     """Собирает объект User из словаря, который лежит в users.json."""
@@ -134,12 +138,14 @@ def show_portfolio(user: User, base_currency: str = "USD") -> str:
         return f"Портфель пользователя '{user.username}' пуст. Купите валюту командой buy."
 
     lines = [f"Портфель пользователя '{user.username}' (база: {base}):"]
-    total = portfolio.get_total_value(base)
+    total = 0.0
 
     for code, wallet in sorted(portfolio.wallets.items()):
-        rate_key = f"{code}_{base}"
-        rate = Portfolio._FAKE_RATES.get(rate_key, 0.0)
+        rate = get_rate_value(code, base)
+        if rate is None:
+            rate = 0.0
         value = wallet.balance * rate
+        total += value
         lines.append(f"- {code}: {wallet.balance:.4f} → {value:.2f} {base}")
 
     lines.append("---------------------------------")
@@ -165,14 +171,12 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
 
     portfolio = load_portfolio(user.user_id)
 
-    # Курс CODE → USD
-    rate = Portfolio._FAKE_RATES.get(f"{code}_USD")
+    rate = get_rate_value(code, "USD")
     if rate is None or rate <= 0:
         raise ValueError(f"Не удалось получить курс для {code}→USD")
 
     cost = amount * rate
 
-    # Кошелёк USD должен существовать и иметь достаточно средств
     usd_wallet = portfolio.get_wallet("USD")
     if usd_wallet is None or usd_wallet.balance < cost:
         available = usd_wallet.balance if usd_wallet else 0.0
@@ -180,7 +184,6 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
             f"Недостаточно USD: доступно {available:.2f}, требуется {cost:.2f}"
         )
 
-    # Создаём кошелёк покупаемой валюты, если его нет
     wallet = portfolio.get_wallet(code)
     if wallet is None:
         wallet = portfolio.add_currency(code)
@@ -188,7 +191,6 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
     old_balance = wallet.balance
     old_usd = usd_wallet.balance
 
-    # Списываем USD и начисляем валюту
     usd_wallet.withdraw(cost)
     wallet.deposit(amount)
     save_portfolio(portfolio)
@@ -227,17 +229,15 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
             "Добавьте валюту: она создаётся автоматически при первой покупке."
         )
 
-    rate = Portfolio._FAKE_RATES.get(f"{code}_USD")
+    rate = get_rate_value(code, "USD")
     if rate is None or rate <= 0:
         raise ValueError(f"Не удалось получить курс для {code}→USD")
 
     revenue = amount * rate
     old_balance = wallet.balance
 
-    # Снимаем валюту (проверка достаточности внутри withdraw)
     wallet.withdraw(amount)
 
-    # Кошелёк USD создаём при необходимости
     usd_wallet = portfolio.get_wallet("USD")
     if usd_wallet is None:
         usd_wallet = portfolio.add_currency("USD")
@@ -254,10 +254,10 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
         f"Выручка: {revenue:.2f} USD"
     )
 
+
 def get_rate(from_currency: str, to_currency: str) -> str:
     """
-    Возвращает курс одной валюты к другой.
-    Пока берёт значения из фиксированного словаря Portfolio._FAKE_RATES.
+    Возвращает курс одной валюты к другой из файла rates.json.
     """
     if not from_currency or not to_currency:
         raise ValueError("Нужно указать обе валюты")
@@ -265,28 +265,20 @@ def get_rate(from_currency: str, to_currency: str) -> str:
     from_code = from_currency.strip().upper()
     to_code = to_currency.strip().upper()
 
-    # Прямой курс
-    direct_key = f"{from_code}_{to_code}"
-    rate = Portfolio._FAKE_RATES.get(direct_key)
-
-    # Обратный курс
-    reverse_key = f"{to_code}_{from_code}"
-    reverse_rate = Portfolio._FAKE_RATES.get(reverse_key)
-
-    if rate is None and reverse_rate is None:
+    rate = get_rate_value(from_code, to_code)
+    if rate is None:
         raise ValueError(f"Курс {from_code}→{to_code} недоступен. Повторите попытку позже.")
 
-    if rate is None and reverse_rate is not None:
-        rate = 1.0 / reverse_rate
-
-    if reverse_rate is None and rate is not None:
-        reverse_rate = 1.0 / rate
+    reverse = get_rate_value(to_code, from_code)
+    if reverse is None and rate > 0:
+        reverse = 1.0 / rate
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
         f"Курс {from_code}→{to_code}: {rate:.8f} (обновлено: {now})\n"
-        f"Обратный курс {to_code}→{from_code}: {reverse_rate:.2f}"
+        f"Обратный курс {to_code}→{from_code}: {reverse:.8f}"
     )
+
 
 def deposit(user: User, currency: str, amount: float) -> str:
     """

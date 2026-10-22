@@ -47,3 +47,34 @@ def load_portfolios() -> list[dict]:
 
 def save_portfolios(portfolios: list[dict]) -> None:
     save_json(PORTFOLIOS_FILE, portfolios)
+
+def load_rates() -> dict:
+    """Загружает курсы из rates.json. Если файла нет — возвращает пустой словарь."""
+    return load_json(RATES_FILE, default={})
+
+
+def save_rates(rates: dict) -> None:
+    """Сохраняет курсы в rates.json."""
+    save_json(RATES_FILE, rates)
+
+
+def get_rate_value(from_currency: str, to_currency: str) -> float | None:
+    """
+    Возвращает числовое значение курса FROM→TO или None, если его нет.
+    Поддерживает прямой и обратный курс.
+    """
+    rates = load_rates()
+    from_code = from_currency.strip().upper()
+    to_code = to_currency.strip().upper()
+
+    direct_key = f"{from_code}_{to_code}"
+    if direct_key in rates and isinstance(rates[direct_key], dict):
+        return rates[direct_key].get("rate")
+
+    reverse_key = f"{to_code}_{from_code}"
+    if reverse_key in rates and isinstance(rates[reverse_key], dict):
+        reverse = rates[reverse_key].get("rate")
+        if reverse and reverse > 0:
+            return 1.0 / reverse
+
+    return None
