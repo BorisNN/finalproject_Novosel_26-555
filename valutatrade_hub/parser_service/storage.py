@@ -88,11 +88,37 @@ class RatesStorage:
                     history = loaded
             except (json.JSONDecodeError, OSError):
                 history = []
-        history.append(
-            {
-                "updated_at": payload.get("last_refresh"),
-                "source": payload.get("source"),
-                "pairs": payload.get("pairs", {}),
-            }
-        )
-        _atomic_write(self.history_path, history[-200:])
+        known = {
+            item.get("id")
+            for item in history
+            if isinstance(item, dict) and item.get("id")
+        }
+        source = payload.get("source") or "unknown"
+        added = False
+        for key, value in payload.get("pairs", {}).items():
+            if not isinstance(value, dict) or "_" not in key:
+                continue
+            left, _, right = key.partition("_")
+            rate = value.get("rate")
+            stamp = value.get("updated_at")
+            if not left or not right or not isinstance(stamp, str):
+                continue
+            if isinstance(rate, bool) or not isinstance(rate, (int, float)):
+                continue
+            record_id = f"{left}_{right}_{stamp}"
+            if record_id in known:
+                continue
+            history.append(
+                {
+                    "id": record_id,
+                    "from_currency": left,
+                    "to_currency": right,
+                    "rate": float(rate),
+                    "timestamp": stamp,
+                    "source": value.get("source") or source,
+                }
+            )
+            known.add(record_id)
+            added = True
+        if added:
+            _atomic_write(self.history_path, history[-500:])

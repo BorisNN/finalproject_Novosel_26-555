@@ -4,7 +4,7 @@ import math
 import secrets
 from datetime import datetime
 
-from ..decorators import log_action
+from ..decorators import log_action, set_log_fields
 from ..infra.database import DatabaseManager
 from ..parser_service.storage import RatesStorage
 from .exceptions import (
@@ -192,7 +192,7 @@ def show_portfolio(user: User, base_currency: str = "USD") -> str:
     return "\n".join(lines)
 
 
-@log_action("buy")
+@log_action("buy", verbose=True)
 def buy_currency(user: User, currency: str, amount: float) -> str:
     """Покупает валюту и списывает эквивалент в USD."""
     if user is None:
@@ -207,6 +207,9 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
 
     portfolio = load_portfolio(user)
     rate = _fresh_rate(code, "USD")
+    set_log_fields(
+        rate=f"{rate:.2f}", base="USD", currency=code, amount=f"{amount:.4f}"
+    )
     cost = amount * rate
 
     usd_wallet = portfolio.get_wallet("USD")
@@ -225,6 +228,7 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
     usd_wallet.withdraw(cost)
     wallet.deposit(amount)
     save_portfolio(portfolio)
+    set_log_fields(detail=f"USD {old_usd:.2f}->{usd_wallet.balance:.2f}")
 
     return (
         f"Покупка выполнена: {amount:.4f} {code} по курсу {rate:.2f} USD/{code}\n"
@@ -235,7 +239,7 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
     )
 
 
-@log_action("sell")
+@log_action("sell", verbose=True)
 def sell_currency(user: User, currency: str, amount: float) -> str:
     """Продаёт валюту и зачисляет эквивалент в USD."""
     if user is None:
@@ -257,6 +261,9 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
         )
 
     rate = _fresh_rate(code, "USD")
+    set_log_fields(
+        rate=f"{rate:.2f}", base="USD", currency=code, amount=f"{amount:.4f}"
+    )
     revenue = amount * rate
     old_balance = wallet.balance
     wallet.withdraw(amount)
@@ -267,6 +274,7 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
     old_usd = usd_wallet.balance
     usd_wallet.deposit(revenue)
     save_portfolio(portfolio)
+    set_log_fields(detail=f"{code} {old_balance:.4f}->{wallet.balance:.4f}")
 
     return (
         f"Продажа выполнена: {amount:.4f} {code} по курсу {rate:.2f} USD/{code}\n"
@@ -277,7 +285,7 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
     )
 
 
-@log_action("get-rate")
+@log_action("get-rate", verbose=True)
 def get_rate(from_currency: str, to_currency: str) -> str:
     """Возвращает курс одной валюты к другой из файла rates.json."""
     if not from_currency or not to_currency:
@@ -286,6 +294,11 @@ def get_rate(from_currency: str, to_currency: str) -> str:
     from_code = _require_known(from_currency)
     to_code = _require_known(to_currency)
     rate = _fresh_rate(from_code, to_code)
+    set_log_fields(
+        rate=f"{rate:.8f}",
+        base=to_code,
+        currency=from_code,
+    )
     reverse_info = get_rate_info(to_code, from_code)
     reverse = reverse_info["rate"] if reverse_info else 1.0 / rate
     info = get_rate_info(from_code, to_code)

@@ -1,81 +1,20 @@
-"""Модели предметной области: валюты, пользователи, кошельки, портфели."""
+"""Модели предметной области: пользователи, кошельки, портфели."""
 
 import hashlib
 import math
 import secrets
 from datetime import datetime
 
-from .exceptions import CurrencyNotFoundError
+from .currencies import get_currency, is_crypto_code
+from .exceptions import InsufficientFundsError
 
-
-class Currency:
-    """Базовая валюта реестра."""
-
-    def __init__(self, code: str, name: str) -> None:
-        self._code = code.strip().upper()
-        self._name = name
-
-    @property
-    def code(self) -> str:
-        return self._code
-
-    @property
-    def name(self) -> str:
-        return self._name
-
-    @property
-    def is_crypto(self) -> bool:
-        return False
-
-
-class FiatCurrency(Currency):
-    """Фиатная валюта: USD, EUR, GBP, RUB."""
-
-
-class CryptoCurrency(Currency):
-    """Криптовалюта. coin_id нужен для запроса к CoinGecko."""
-
-    def __init__(self, code: str, name: str, coin_id: str) -> None:
-        super().__init__(code, name)
-        self._coin_id = coin_id
-
-    @property
-    def coin_id(self) -> str:
-        return self._coin_id
-
-    @property
-    def is_crypto(self) -> bool:
-        return True
-
-
-_REGISTRY: dict[str, Currency] = {
-    "USD": FiatCurrency("USD", "US Dollar"),
-    "EUR": FiatCurrency("EUR", "Euro"),
-    "GBP": FiatCurrency("GBP", "British Pound"),
-    "RUB": FiatCurrency("RUB", "Russian Ruble"),
-    "BTC": CryptoCurrency("BTC", "Bitcoin", "bitcoin"),
-    "ETH": CryptoCurrency("ETH", "Ethereum", "ethereum"),
-    "SOL": CryptoCurrency("SOL", "Solana", "solana"),
-}
-
-
-def get_currency(code: str) -> Currency:
-    """Фабрика: код из реестра или CurrencyNotFoundError."""
-    if not code or not str(code).strip():
-        raise CurrencyNotFoundError("Код валюты не указан")
-    key = str(code).strip().upper()
-    currency = _REGISTRY.get(key)
-    if currency is None:
-        raise CurrencyNotFoundError(f"Валюта '{key}' не найдена")
-    return currency
-
-
-def is_crypto_code(code: str) -> bool:
-    """True, если код есть в реестре и это криптовалюта."""
-    try:
-        return get_currency(code).is_crypto
-    except CurrencyNotFoundError:
-        return False
+__all__ = [
+    "Portfolio",
+    "User",
+    "Wallet",
+    "get_currency",
+    "is_crypto_code",
+]
 
 
 class User:
@@ -192,9 +131,10 @@ class Wallet:
         if not math.isfinite(amount) or amount <= 0:
             raise ValueError("Сумма снятия должна быть положительным числом")
         if amount > self.balance:
-            raise ValueError(
-                f"Недостаточно средств: доступно {self.balance:.4f} {self.currency_code}, "
-                f"требуется {amount:.4f}"
+            raise InsufficientFundsError(
+                "Недостаточно средств: "
+                f"доступно {self.balance:.4f} {self.currency_code}, "
+                f"требуется {amount:.4f} {self.currency_code}"
             )
         self.balance -= amount
 

@@ -45,8 +45,8 @@ EXCHANGERATE_API_KEY=ключ
 Файл `.env` в Git не добавляй. Без ключа CoinGecko всё равно запрашивается, фиатные курсы — нет.
 
 Курсы лежат в локальном кеше `data/rates.json` в виде `{"pairs": ..., "last_refresh": ...}`.
-Каждое сохранение дописывает снимок в `data/exchange_rates.json`. Оба файла в Git не входят.
-Срок актуальности курса — 3600 секунд. Его проверяют `get-rate`, `buy` и `sell`.
+Каждое сохранение дописывает в `data/exchange_rates.json` отдельные измерения: id, from_currency, to_currency, rate, timestamp, source. Повтор того же id не пишется. Оба файла в Git не входят.
+Срок актуальности курса берётся из config.json, ключ rates_ttl_seconds (сейчас 3600). Его проверяют `get-rate`, `buy` и `sell`.
 `show-rates --top N` показывает N самых дорогих криптовалют.
 `show-rates --base EUR` пересчитывает пары в евро.
 

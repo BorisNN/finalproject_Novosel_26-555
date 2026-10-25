@@ -12,9 +12,6 @@ USERS_FILE = DATA_DIR / "users.json"
 PORTFOLIOS_FILE = DATA_DIR / "portfolios.json"
 RATES_FILE = DATA_DIR / "rates.json"
 
-# Срок актуальности курса: 1 час.
-RATE_TTL_SECONDS = 3600
-
 
 def load_json(path: Path, default: Any = None) -> Any:
     """Читает JSON. Если файла нет или он пустой — возвращает default."""
@@ -149,8 +146,15 @@ def get_rate_value(from_currency: str, to_currency: str) -> float | None:
     return info["rate"]
 
 
+def _ttl_seconds() -> int:
+    """Срок из SettingsLoader, не из константы в этом файле."""
+    from ..infra.settings import SettingsLoader
+
+    return SettingsLoader().rates_ttl_seconds
+
+
 def rate_is_fresh(updated_at: str | None, now: datetime | None = None) -> bool:
-    """True, если метки нет или она не старше RATE_TTL_SECONDS."""
+    """True, если метки нет или она не старше rates_ttl_seconds."""
     if not updated_at:
         return True
     try:
@@ -158,7 +162,7 @@ def rate_is_fresh(updated_at: str | None, now: datetime | None = None) -> bool:
     except ValueError:
         return False
     current = _aware(now or datetime.now().astimezone())
-    return (current - updated).total_seconds() <= RATE_TTL_SECONDS
+    return (current - updated).total_seconds() <= _ttl_seconds()
 
 
 def format_updated_at(updated_at: str | None) -> str:

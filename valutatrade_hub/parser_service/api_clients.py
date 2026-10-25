@@ -49,6 +49,9 @@ class CoinGeckoClient(BaseApiClient):
         except requests.RequestException as exc:
             raise ApiRequestError(f"CoinGecko: {exc}") from exc
 
+        if not isinstance(data, dict):
+            raise ApiRequestError("CoinGecko вернул неожиданный формат ответа")
+
         result = {}
         id_to_code = {v: k for k, v in self.config.CRYPTO_ID_MAP.items()}
         for coin_id, prices in data.items():

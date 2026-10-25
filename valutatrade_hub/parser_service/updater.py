@@ -55,7 +55,7 @@ class RatesUpdater:
         if mode in ("all", "crypto"):
             try:
                 crypto_rates = self.crypto_client.fetch_rates()
-                self._store_pairs(pairs, crypto_rates, now)
+                self._store_pairs(pairs, crypto_rates, now, "CoinGecko")
                 if crypto_rates:
                     updated_any = True
                 messages.append(f"крипто: {len(crypto_rates)} курсов")
@@ -65,7 +65,7 @@ class RatesUpdater:
         if mode in ("all", "fiat"):
             try:
                 fiat_rates = self.fiat_client.fetch_rates()
-                self._store_pairs(pairs, fiat_rates, now)
+                self._store_pairs(pairs, fiat_rates, now, "ExchangeRate-API")
                 if fiat_rates:
                     updated_any = True
                 messages.append(f"фиат: {len(fiat_rates)} курсов")
@@ -84,10 +84,17 @@ class RatesUpdater:
         return "Обновление завершено: " + "; ".join(messages)
 
     @staticmethod
-    def _store_pairs(pairs: dict, fresh: dict, now: str) -> None:
-        cleaned: dict = {}
+    def _store_pairs(pairs: dict, fresh: dict, now: str, source: str) -> None:
         for key, value in fresh.items():
             if not _acceptable_rate(value):
                 raise ValueError(f"Некорректный курс {key}: {value}")
-            cleaned[key] = {"rate": float(value), "updated_at": now}
-        pairs.update(cleaned)
+            current = pairs.get(key)
+            if isinstance(current, dict):
+                old_stamp = current.get("updated_at")
+                if isinstance(old_stamp, str) and old_stamp > now:
+                    continue
+            pairs[key] = {
+                "rate": float(value),
+                "updated_at": now,
+                "source": source,
+            }
