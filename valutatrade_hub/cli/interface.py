@@ -14,6 +14,7 @@ from ..core.usecases import (
     update_rate,
 )
 from ..core.models import User
+from ..core.exceptions import ValutaTradeError
 from ..parser_service.fetcher import fetch_and_update_rates
 
 
@@ -166,6 +167,8 @@ def handle_command(line: str) -> str:
         else:
             return f"Неизвестная команда: {cmd}. Напишите help"
 
+    except ValutaTradeError as e:
+        return str(e)
     except ValueError as e:
         return str(e)
     except Exception as e:
