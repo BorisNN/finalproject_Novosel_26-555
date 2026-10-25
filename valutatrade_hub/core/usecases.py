@@ -4,7 +4,9 @@ import math
 import secrets
 from datetime import datetime
 
-from ..logging_config import get_logger
+from ..decorators import log_action
+from ..infra.database import DatabaseManager
+from ..parser_service.storage import RatesStorage
 from .exceptions import (
     AuthRequiredError,
     InsufficientFundsError,
@@ -12,21 +14,15 @@ from .exceptions import (
     UserError,
     ValidationError,
 )
-from .models import Portfolio, User, Wallet
+from .models import Portfolio, User, Wallet, get_currency, is_crypto_code
 from .utils import (
     format_updated_at,
     get_rate_info,
     get_rate_value,
-    load_portfolios,
-    load_rates,
-    load_users,
     rate_is_fresh,
-    save_portfolios,
-    save_rates,
-    save_users,
 )
 
-logger = get_logger(__name__)
+db = DatabaseManager()
 
 
 def _positive_number(value: object, name: str) -> float:
@@ -38,43 +34,60 @@ def _positive_number(value: object, name: str) -> float:
     return float(value)
 
 
+def _require_known(code: str) -> str:
+    return get_currency(code).code
+
+
+def _fresh_rate(from_code: str, to_code: str) -> float:
+    """Курс для сделки. Устаревший курс сюда не проходит."""
+    info = get_rate_info(from_code, to_code)
+    if info is None or info["rate"] <= 0:
+        raise RateUnavailableError(
+            f"Не удалось получить курс для {from_code}→{to_code}"
+        )
+    if not rate_is_fresh(info.get("updated_at")):
+        shown = format_updated_at(info.get("updated_at"))
+        raise RateUnavailableError(
+            f"Курс {from_code}→{to_code} устарел (обновлено: {shown}). "
+            "Выполните update-rates или update-rate."
+        )
+    return info["rate"]
+
+
+@log_action("register")
 def register_user(username: str, password: str) -> str:
-    """
-    Регистрирует нового пользователя.
-    Создаёт пустой портфель.
-    """
+    """Регистрирует нового пользователя и создаёт пустой портфель."""
     username = username.strip() if username else ""
     if not username:
         raise ValidationError("Имя пользователя не может быть пустым")
     if not password or len(password) < 4:
         raise ValidationError("Пароль должен быть не короче 4 символов")
 
-    users = load_users()
-    for u in users:
-        if u.get("username", "").lower() == username.lower():
+    users = db.load_users()
+    for user in users:
+        if user.get("username", "").lower() == username.lower():
             raise UserError(f"Имя пользователя '{username}' уже занято")
 
-    user_id = max((u.get("user_id", 0) for u in users), default=0) + 1
+    user_id = max((user.get("user_id", 0) for user in users), default=0) + 1
     salt = secrets.token_hex(16)
     temp_user = User(user_id, username, "", salt, datetime.now())
     temp_user.change_password(password)
 
-    user_data = {
-        "user_id": user_id,
-        "username": username,
-        "hashed_password": temp_user.hashed_password,
-        "salt": temp_user.salt,
-        "registration_date": datetime.now().isoformat(timespec="seconds"),
-    }
-    users.append(user_data)
-    save_users(users)
+    users.append(
+        {
+            "user_id": user_id,
+            "username": username,
+            "hashed_password": temp_user.hashed_password,
+            "salt": temp_user.salt,
+            "registration_date": datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+    db.save_users(users)
 
-    # Пустой портфель, как в задании
-    portfolios = load_portfolios()
+    portfolios = db.load_portfolios()
     portfolios.append({"user_id": user_id, "wallets": {}})
-    save_portfolios(portfolios)
+    db.save_portfolios(portfolios)
 
-    logger.info("Зарегистрирован пользователь %s (id=%s)", username, user_id)
     return (
         f"Пользователь '{username}' зарегистрирован (id={user_id}). "
         f"Войдите: login --username {username} --password ****"
@@ -93,20 +106,17 @@ def _user_from_dict(data: dict) -> User:
     )
 
 
+@log_action("login")
 def login_user(username: str, password: str) -> User:
-    """
-    Проверяет имя и пароль.
-    Возвращает объект User при успехе или бросает UserError.
-    """
+    """Проверяет имя и пароль. Возвращает User или бросает UserError."""
     username = username.strip() if username else ""
     if not username or not password:
         raise ValidationError("Нужно указать имя пользователя и пароль")
 
-    users = load_users()
     found = None
-    for u in users:
-        if u.get("username", "").lower() == username.lower():
-            found = u
+    for user in db.load_users():
+        if user.get("username", "").lower() == username.lower():
+            found = user
             break
 
     if found is None:
@@ -115,57 +125,50 @@ def login_user(username: str, password: str) -> User:
     user = _user_from_dict(found)
     if not user.verify_password(password):
         raise UserError("Неверный пароль")
-
-    logger.info("Пользователь %s вошёл в систему", username)
     return user
 
 
-def load_portfolio(user_id: int) -> Portfolio:
+def load_portfolio(user: User) -> Portfolio:
     """Загружает портфель пользователя из JSON и собирает объекты Wallet."""
-    portfolios = load_portfolios()
-    for p in portfolios:
-        if p.get("user_id") == user_id:
-            portfolio = Portfolio(user_id)
-            wallets_data = p.get("wallets", {})
-            for code, w_data in wallets_data.items():
-                balance = w_data.get("balance", 0.0)
-                wallet = Wallet(code, balance)
-                portfolio._wallets[code] = wallet
-            return portfolio
-    return Portfolio(user_id)
+    portfolio = Portfolio(user)
+    for item in db.load_portfolios():
+        if item.get("user_id") != user.user_id:
+            continue
+        for code, wallet_data in item.get("wallets", {}).items():
+            balance = wallet_data.get("balance", 0.0)
+            portfolio._wallets[code] = Wallet(code, balance)
+        break
+    return portfolio
 
 
 def save_portfolio(portfolio: Portfolio) -> None:
     """Сохраняет портфель обратно в portfolios.json."""
-    portfolios = load_portfolios()
+    portfolios = db.load_portfolios()
     wallets_dict = {
-        code: {"balance": wallet.balance}
-        for code, wallet in portfolio.wallets.items()
+        code: {"balance": wallet.balance} for code, wallet in portfolio.wallets.items()
     }
-    found = False
-    for p in portfolios:
-        if p.get("user_id") == portfolio.user_id:
-            p["wallets"] = wallets_dict
-            found = True
-            break
-    if not found:
-        portfolios.append({"user_id": portfolio.user_id, "wallets": wallets_dict})
-    save_portfolios(portfolios)
+    for item in portfolios:
+        if item.get("user_id") == portfolio.user_id:
+            item["wallets"] = wallets_dict
+            db.save_portfolios(portfolios)
+            return
+    portfolios.append({"user_id": portfolio.user_id, "wallets": wallets_dict})
+    db.save_portfolios(portfolios)
 
 
+@log_action("show-portfolio")
 def show_portfolio(user: User, base_currency: str = "USD") -> str:
-    """
-    Формирует текстовое представление портфеля.
-    Если кошельков нет — говорит об этом.
-    """
+    """Текстовое представление портфеля. Пустой портфель сообщает об этом."""
     if user is None:
         raise AuthRequiredError("Сначала выполните login")
 
-    portfolio = load_portfolio(user.user_id)
-    base = base_currency.strip().upper() if base_currency else "USD"
+    base = _require_known(base_currency)
+    portfolio = load_portfolio(user)
 
     if not portfolio.wallets:
-        return f"Портфель пользователя '{user.username}' пуст. Купите валюту командой buy."
+        return (
+            f"Портфель пользователя '{user.username}' пуст. Купите валюту командой buy."
+        )
 
     lines = [f"Портфель пользователя '{user.username}' (база: {base}):"]
     total = 0.0
@@ -189,27 +192,21 @@ def show_portfolio(user: User, base_currency: str = "USD") -> str:
     return "\n".join(lines)
 
 
+@log_action("buy")
 def buy_currency(user: User, currency: str, amount: float) -> str:
-    """
-    Покупает указанное количество валюты.
-    Списывает эквивалент в USD с кошелька USD.
-    """
+    """Покупает валюту и списывает эквивалент в USD."""
     if user is None:
         raise AuthRequiredError("Сначала выполните login")
     if not currency or not currency.strip():
         raise ValidationError("Нужно указать код валюты")
     amount = _positive_number(amount, "amount")
 
-    code = currency.strip().upper()
+    code = _require_known(currency)
     if code == "USD":
         raise ValidationError("Нельзя купить USD за USD")
 
-    portfolio = load_portfolio(user.user_id)
-
-    rate = get_rate_value(code, "USD")
-    if rate is None or rate <= 0:
-        raise RateUnavailableError(f"Не удалось получить курс для {code}→USD")
-
+    portfolio = load_portfolio(user)
+    rate = _fresh_rate(code, "USD")
     cost = amount * rate
 
     usd_wallet = portfolio.get_wallet("USD")
@@ -225,12 +222,10 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
 
     old_balance = wallet.balance
     old_usd = usd_wallet.balance
-
     usd_wallet.withdraw(cost)
     wallet.deposit(amount)
     save_portfolio(portfolio)
 
-    logger.info("Пользователь %s купил %.4f %s за %.2f USD", user.username, amount, code, cost)
     return (
         f"Покупка выполнена: {amount:.4f} {code} по курсу {rate:.2f} USD/{code}\n"
         f"Изменения в портфеле:\n"
@@ -240,23 +235,20 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
     )
 
 
+@log_action("sell")
 def sell_currency(user: User, currency: str, amount: float) -> str:
-    """
-    Продаёт указанное количество валюты.
-    Зачисляет эквивалент в USD на кошелёк USD.
-    """
+    """Продаёт валюту и зачисляет эквивалент в USD."""
     if user is None:
         raise AuthRequiredError("Сначала выполните login")
     if not currency or not currency.strip():
         raise ValidationError("Нужно указать код валюты")
     amount = _positive_number(amount, "amount")
 
-    code = currency.strip().upper()
+    code = _require_known(currency)
     if code == "USD":
         raise ValidationError("Нельзя продать USD за USD")
 
-    portfolio = load_portfolio(user.user_id)
-
+    portfolio = load_portfolio(user)
     wallet = portfolio.get_wallet(code)
     if wallet is None:
         raise InsufficientFundsError(
@@ -264,13 +256,9 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
             "Добавьте валюту: она создаётся автоматически при первой покупке."
         )
 
-    rate = get_rate_value(code, "USD")
-    if rate is None or rate <= 0:
-        raise RateUnavailableError(f"Не удалось получить курс для {code}→USD")
-
+    rate = _fresh_rate(code, "USD")
     revenue = amount * rate
     old_balance = wallet.balance
-
     wallet.withdraw(amount)
 
     usd_wallet = portfolio.get_wallet("USD")
@@ -278,10 +266,8 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
         usd_wallet = portfolio.add_currency("USD")
     old_usd = usd_wallet.balance
     usd_wallet.deposit(revenue)
-
     save_portfolio(portfolio)
 
-    logger.info("Пользователь %s продал %.4f %s за %.2f USD", user.username, amount, code, revenue)
     return (
         f"Продажа выполнена: {amount:.4f} {code} по курсу {rate:.2f} USD/{code}\n"
         f"Изменения в портфеле:\n"
@@ -291,54 +277,37 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
     )
 
 
+@log_action("get-rate")
 def get_rate(from_currency: str, to_currency: str) -> str:
-    """
-    Возвращает курс одной валюты к другой из файла rates.json.
-    """
+    """Возвращает курс одной валюты к другой из файла rates.json."""
     if not from_currency or not to_currency:
         raise ValidationError("Нужно указать обе валюты")
 
-    from_code = from_currency.strip().upper()
-    to_code = to_currency.strip().upper()
-
-    info = get_rate_info(from_code, to_code)
-    if info is None:
-        raise RateUnavailableError(
-            f"Курс {from_code}→{to_code} недоступен. Повторите попытку позже."
-        )
-
-    updated = info.get("updated_at")
-    if not rate_is_fresh(updated):
-        shown = format_updated_at(updated)
-        raise RateUnavailableError(
-            f"Курс {from_code}→{to_code} устарел (обновлено: {shown}). "
-            "Выполните update-rates или update-rate."
-        )
-
-    rate = info["rate"]
+    from_code = _require_known(from_currency)
+    to_code = _require_known(to_currency)
+    rate = _fresh_rate(from_code, to_code)
     reverse_info = get_rate_info(to_code, from_code)
-    reverse = reverse_info["rate"] if reverse_info else (1.0 / rate if rate > 0 else None)
-    shown = format_updated_at(updated) if updated else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    reverse = reverse_info["rate"] if reverse_info else 1.0 / rate
+    info = get_rate_info(from_code, to_code)
+    updated = info.get("updated_at") if info else None
+    shown = format_updated_at(updated) if updated else "неизвестно"
     return (
         f"Курс {from_code}→{to_code}: {rate:.8f} (обновлено: {shown})\n"
         f"Обратный курс {to_code}→{from_code}: {reverse:.8f}"
     )
 
 
+@log_action("deposit")
 def deposit(user: User, currency: str, amount: float) -> str:
-    """
-    Пополняет кошелёк указанной валюты.
-    Если кошелька нет — создаёт его.
-    """
+    """Пополняет кошелёк известной валюты. Неизвестную не создаёт."""
     if user is None:
         raise AuthRequiredError("Сначала выполните login")
     if not currency or not currency.strip():
         raise ValidationError("Нужно указать код валюты")
     amount = _positive_number(amount, "amount")
 
-    code = currency.strip().upper()
-    portfolio = load_portfolio(user.user_id)
-
+    code = _require_known(currency)
+    portfolio = load_portfolio(user)
     wallet = portfolio.get_wallet(code)
     if wallet is None:
         wallet = portfolio.add_currency(code)
@@ -346,36 +315,55 @@ def deposit(user: User, currency: str, amount: float) -> str:
     old_balance = wallet.balance
     wallet.deposit(amount)
     save_portfolio(portfolio)
-
-    logger.info("Пользователь %s пополнил %s на %.4f", user.username, code, amount)
     return (
         f"Пополнение выполнено: +{amount:.4f} {code}\n"
         f"{code}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
     )
 
-def show_rates(currency: str | None = None, top: int | None = None) -> str:
-    """Показывает курсы из rates.json. Можно сузить по валюте и взять top N."""
-    rates = load_rates()
-    if not rates:
+
+def show_rates(
+    currency: str | None = None,
+    top: int | None = None,
+    base: str | None = None,
+) -> str:
+    """Курсы из кеша. --base пересчитывает пары, --top берёт дорогие криптовалюты."""
+    document = RatesStorage().load()
+    pairs = document.get("pairs", {})
+    if not pairs:
         return "Курсы не загружены."
 
     code_filter = currency.strip().upper() if currency else ""
-    items: list[tuple[str, dict]] = []
-    for key, value in rates.items():
-        if key in ("source", "last_refresh"):
-            continue
+    if code_filter:
+        _require_known(code_filter)
+    base_code = _require_known(base) if base else "USD"
+
+    items: list[tuple[str, float, str | None]] = []
+    for key, value in pairs.items():
         if not isinstance(value, dict) or "rate" not in value:
             continue
-        if code_filter:
-            left, _, right = key.partition("_")
-            if code_filter not in (left, right):
-                continue
-        items.append((key, value))
+        left, _, right = key.partition("_")
+        if code_filter and code_filter not in (left, right):
+            continue
+        rate = get_rate_value(left, right)
+        if rate is None:
+            continue
+        if base_code != right:
+            bridge = get_rate_value(right, base_code)
+            if bridge is None:
+                raise RateUnavailableError(
+                    f"Не удалось пересчитать курсы в {base_code}. "
+                    "Сначала обновите курс этой валюты к USD."
+                )
+            rate *= bridge
+        if left == base_code:
+            continue
+        items.append((f"{left}_{base_code}", rate, value.get("updated_at")))
 
     if top is not None:
         if isinstance(top, bool) or not isinstance(top, int) or top <= 0:
             raise ValidationError("'top' должен быть положительным целым числом")
-        items.sort(key=lambda item: float(item[1]["rate"]), reverse=True)
+        items = [item for item in items if is_crypto_code(item[0].split("_", 1)[0])]
+        items.sort(key=lambda item: item[1], reverse=True)
         items = items[:top]
 
     if not items:
@@ -384,39 +372,33 @@ def show_rates(currency: str | None = None, top: int | None = None) -> str:
         return "Курсы не загружены."
 
     lines = ["Текущие курсы:"]
-    for key, value in items:
-        updated = format_updated_at(value.get("updated_at"))
-        lines.append(f"- {key}: {value['rate']} (обновлено: {updated})")
+    for key, rate, updated_at in items:
+        lines.append(f"- {key}: {rate} (обновлено: {format_updated_at(updated_at)})")
 
-    source = rates.get("source", "неизвестно")
-    last = format_updated_at(rates.get("last_refresh")) if rates.get("last_refresh") else "неизвестно"
+    source = document.get("source") or "неизвестно"
+    last = document.get("last_refresh")
     lines.append(f"Источник: {source}")
-    lines.append(f"Последнее обновление: {last}")
+    lines.append(
+        f"Последнее обновление: {format_updated_at(last) if last else 'неизвестно'}"
+    )
     return "\n".join(lines)
 
 
+@log_action("update-rate")
 def update_rate(from_currency: str, to_currency: str, new_rate: float) -> str:
-    """
-    Вручную обновляет один курс в rates.json.
-    Пока это заглушка — позже её заменит парсер.
-    """
+    """Вручную обновляет один курс в кеше."""
     if not from_currency or not to_currency:
         raise ValidationError("Нужно указать обе валюты")
     new_rate = _positive_number(new_rate, "rate")
-
-    from_code = from_currency.strip().upper()
-    to_code = to_currency.strip().upper()
+    from_code = _require_known(from_currency)
+    to_code = _require_known(to_currency)
     key = f"{from_code}_{to_code}"
 
-    rates = load_rates()
+    storage = RatesStorage()
+    document = storage.load()
     now = datetime.now().isoformat(timespec="seconds")
-
-    rates[key] = {
-        "rate": float(new_rate),
-        "updated_at": now,
-    }
-    rates["source"] = "manual"
-    rates["last_refresh"] = now
-
-    save_rates(rates)
+    document["pairs"][key] = {"rate": float(new_rate), "updated_at": now}
+    document["source"] = "manual"
+    document["last_refresh"] = now
+    storage.save(document)
     return f"Курс {key} обновлён: {new_rate} (время: {now})"

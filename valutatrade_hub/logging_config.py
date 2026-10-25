@@ -1,11 +1,12 @@
 """Настройка логирования для ValutaTrade Hub."""
 
 import logging
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 
 def setup_logging() -> None:
-    """Настраивает логирование: консоль + файл logs/app.log."""
+    """Консоль и файл logs/app.log с ротацией."""
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
     log_file = log_dir / "app.log"
@@ -15,7 +16,12 @@ def setup_logging() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
         handlers=[
-            logging.FileHandler(log_file, encoding="utf-8"),
+            RotatingFileHandler(
+                log_file,
+                maxBytes=512_000,
+                backupCount=3,
+                encoding="utf-8",
+            ),
             logging.StreamHandler(),
         ],
     )

@@ -1,14 +1,12 @@
 """Координатор обновления курсов."""
 
+import math
 from datetime import datetime
 
-from ..core.exceptions import ValidationError
-from ..core.utils import load_rates, save_rates
-from ..logging_config import get_logger
-from .api_clients import ApiRequestError, CoinGeckoClient, ExchangeRateApiClient
-from .config import ParserConfig
-
-logger = get_logger(__name__)
+from ..core.exceptions import RateUnavailableError, ValidationError
+from ..decorators import log_action
+from .api_clients import ApiRequestError
+from .storage import RatesStorage
 
 _SOURCE_ALIASES = {
     "all": "all",
@@ -20,14 +18,23 @@ _SOURCE_ALIASES = {
 }
 
 
-class RatesUpdater:
-    def __init__(self):
-        self.config = ParserConfig()
-        self.crypto_client = CoinGeckoClient(self.config)
-        self.fiat_client = ExchangeRateApiClient(self.config)
+def _acceptable_rate(value) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value) and value > 0
 
-    def update(self, source: str | None = None) -> str:
-        """Получает курсы и сохраняет в rates.json.
+
+class RatesUpdater:
+    """Обновляет кеш. Клиенты и хранилище приходят снаружи."""
+
+    def __init__(self, crypto_client, fiat_client, storage: RatesStorage) -> None:
+        self.crypto_client = crypto_client
+        self.fiat_client = fiat_client
+        self.storage = storage
+
+    @log_action("update-rates")
+    def run_update(self, source: str | None = None) -> str:
+        """Получает курсы и сохраняет документ {"pairs", "last_refresh"}.
 
         last_refresh меняется только если хотя бы один источник вернул курсы.
         source: coingecko, exchangerate или пусто (оба).
@@ -39,7 +46,8 @@ class RatesUpdater:
                 "Неизвестный источник. Допустимо: coingecko, exchangerate"
             )
 
-        rates = load_rates()
+        document = self.storage.load()
+        pairs = document["pairs"]
         now = datetime.now().isoformat(timespec="seconds")
         messages = []
         updated_any = False
@@ -47,32 +55,39 @@ class RatesUpdater:
         if mode in ("all", "crypto"):
             try:
                 crypto_rates = self.crypto_client.fetch_rates()
-                for key, value in crypto_rates.items():
-                    rates[key] = {"rate": value, "updated_at": now}
+                self._store_pairs(pairs, crypto_rates, now)
                 if crypto_rates:
                     updated_any = True
                 messages.append(f"крипто: {len(crypto_rates)} курсов")
-            except ApiRequestError as e:
-                messages.append(f"крипто ошибка: {e}")
+            except (ApiRequestError, ValueError) as exc:
+                messages.append(f"крипто ошибка: {exc}")
 
         if mode in ("all", "fiat"):
             try:
                 fiat_rates = self.fiat_client.fetch_rates()
-                for key, value in fiat_rates.items():
-                    rates[key] = {"rate": value, "updated_at": now}
+                self._store_pairs(pairs, fiat_rates, now)
                 if fiat_rates:
                     updated_any = True
                 messages.append(f"фиат: {len(fiat_rates)} курсов")
-            except ApiRequestError as e:
-                messages.append(f"фиат ошибка: {e}")
+            except (ApiRequestError, ValueError) as exc:
+                messages.append(f"фиат ошибка: {exc}")
 
         if not updated_any:
-            logger.info("Обновление курсов не сохранено: %s", "; ".join(messages))
-            return "Обновление не выполнено: " + "; ".join(messages)
+            raise RateUnavailableError(
+                "Обновление не выполнено: " + "; ".join(messages)
+            )
 
-        rates["source"] = "ParserService"
-        rates["last_refresh"] = now
-        save_rates(rates)
-
-        logger.info("Обновление курсов завершено: %s", "; ".join(messages))
+        document["pairs"] = pairs
+        document["source"] = "ParserService"
+        document["last_refresh"] = now
+        self.storage.save(document)
         return "Обновление завершено: " + "; ".join(messages)
+
+    @staticmethod
+    def _store_pairs(pairs: dict, fresh: dict, now: str) -> None:
+        cleaned: dict = {}
+        for key, value in fresh.items():
+            if not _acceptable_rate(value):
+                raise ValueError(f"Некорректный курс {key}: {value}")
+            cleaned[key] = {"rate": float(value), "updated_at": now}
+        pairs.update(cleaned)

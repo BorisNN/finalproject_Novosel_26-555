@@ -1,5 +1,6 @@
 """Клиенты для внешних API курсов."""
 
+import math
 from abc import ABC, abstractmethod
 
 import requests
@@ -15,6 +16,16 @@ class BaseApiClient(ABC):
     @abstractmethod
     def fetch_rates(self) -> dict:
         """Возвращает словарь вида {'BTC_USD': 60000.0, ...}."""
+
+
+def _positive_price(value, source: str, code: str) -> float:
+    """Не отдаёт отрицательную, нулевую или бесконечную цену."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ApiRequestError(f"{source} вернул некорректный курс для {code}")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise ApiRequestError(f"{source} вернул некорректный курс для {code}: {value}")
+    return number
 
 
 class CoinGeckoClient(BaseApiClient):
@@ -35,18 +46,21 @@ class CoinGeckoClient(BaseApiClient):
             )
             resp.raise_for_status()
             data = resp.json()
-        except requests.RequestException as e:
-            raise ApiRequestError(f"CoinGecko: {e}") from e
+        except requests.RequestException as exc:
+            raise ApiRequestError(f"CoinGecko: {exc}") from exc
 
         result = {}
         id_to_code = {v: k for k, v in self.config.CRYPTO_ID_MAP.items()}
         for coin_id, prices in data.items():
             code = id_to_code.get(coin_id)
-            if not code:
+            if not code or not isinstance(prices, dict):
                 continue
-            rate = prices.get(self.config.BASE_CURRENCY.lower())
-            if rate is not None:
-                result[f"{code}_{self.config.BASE_CURRENCY}"] = float(rate)
+            raw = prices.get(self.config.BASE_CURRENCY.lower())
+            if raw is None:
+                continue
+            result[f"{code}_{self.config.BASE_CURRENCY}"] = _positive_price(
+                raw, "CoinGecko", code
+            )
         return result
 
 
@@ -67,17 +81,21 @@ class ExchangeRateApiClient(BaseApiClient):
             resp = requests.get(url, timeout=self.config.REQUEST_TIMEOUT)
             resp.raise_for_status()
             data = resp.json()
-        except requests.RequestException as e:
-            raise ApiRequestError(f"ExchangeRate-API: {e}") from e
+        except requests.RequestException as exc:
+            raise ApiRequestError(f"ExchangeRate-API: {exc}") from exc
 
         if data.get("result") != "success":
-            raise ApiRequestError(f"ExchangeRate-API вернул ошибку: {data.get('error-type')}")
+            raise ApiRequestError(
+                f"ExchangeRate-API вернул ошибку: {data.get('error-type')}"
+            )
 
         rates = data.get("conversion_rates", {})
         result = {}
         for fiat in self.config.FIAT_CURRENCIES:
             rate = rates.get(fiat)
-            if rate is not None and rate > 0:
-                # В API курс — сколько единиц fiat за 1 USD, нам нужен fiat→USD
-                result[f"{fiat}_{self.config.BASE_CURRENCY}"] = 1.0 / float(rate)
+            if rate is None:
+                continue
+            number = _positive_price(rate, "ExchangeRate-API", fiat)
+            # В API курс — сколько единиц fiat за 1 USD, нам нужен fiat→USD
+            result[f"{fiat}_{self.config.BASE_CURRENCY}"] = 1.0 / number
         return result

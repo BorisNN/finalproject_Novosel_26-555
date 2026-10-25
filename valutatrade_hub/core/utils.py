@@ -1,19 +1,18 @@
-"""Вспомогательные функции: работа с JSON-файлами и простые утилиты."""
+"""Вспомогательные функции: работа с JSON-файлами и курсами."""
 
 import json
 import math
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-# Пути относительно корня проекта
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 USERS_FILE = DATA_DIR / "users.json"
 PORTFOLIOS_FILE = DATA_DIR / "portfolios.json"
 RATES_FILE = DATA_DIR / "rates.json"
 
-# Курс старше этого срока считается устаревшим в команде get-rate.
-# В тексте задания точное число не было, поэтому одна константа: 1 час.
+# Срок актуальности курса: 1 час.
 RATE_TTL_SECONDS = 3600
 
 
@@ -22,8 +21,8 @@ def load_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default if default is not None else []
     try:
-        with path.open(encoding="utf-8") as f:
-            content = f.read().strip()
+        with path.open(encoding="utf-8") as file:
+            content = file.read().strip()
             if not content:
                 return default if default is not None else []
             return json.loads(content)
@@ -32,10 +31,14 @@ def load_json(path: Path, default: Any = None) -> Any:
 
 
 def save_json(path: Path, data: Any) -> None:
-    """Записывает данные в JSON с нормальным форматированием."""
+    """Атомарно записывает JSON: сначала временный файл, потом замена."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
 
 
 def load_users() -> list[dict]:
@@ -53,14 +56,19 @@ def load_portfolios() -> list[dict]:
 def save_portfolios(portfolios: list[dict]) -> None:
     save_json(PORTFOLIOS_FILE, portfolios)
 
+
 def load_rates() -> dict:
-    """Загружает курсы из rates.json. Если файла нет — возвращает пустой словарь."""
-    return load_json(RATES_FILE, default={})
+    """Документ курсов: pairs, last_refresh, source."""
+    from ..parser_service.storage import RatesStorage
+
+    return RatesStorage().load()
 
 
 def save_rates(rates: dict) -> None:
-    """Сохраняет курсы в rates.json."""
-    save_json(RATES_FILE, rates)
+    """Сохраняет документ курсов и снимок истории."""
+    from ..parser_service.storage import RatesStorage
+
+    RatesStorage().save(rates)
 
 
 def _positive_rate(value: Any) -> float | None:
@@ -72,9 +80,11 @@ def _positive_rate(value: Any) -> float | None:
     return float(value)
 
 
-def _rate_entry(rates: dict, from_code: str, to_code: str) -> tuple[float, str | None] | None:
-    """Прямая запись FROM_TO из rates.json."""
-    item = rates.get(f"{from_code}_{to_code}")
+def _rate_entry(
+    pairs: dict, from_code: str, to_code: str
+) -> tuple[float, str | None] | None:
+    """Прямая запись FROM_TO из pairs."""
+    item = pairs.get(f"{from_code}_{to_code}")
     if not isinstance(item, dict):
         return None
     rate = _positive_rate(item.get("rate"))
@@ -84,26 +94,36 @@ def _rate_entry(rates: dict, from_code: str, to_code: str) -> tuple[float, str |
     return rate, updated if isinstance(updated, str) else None
 
 
-def get_rate_info(from_currency: str, to_currency: str) -> dict | None:
-    """
-    Курс FROM→TO и время, с которого он посчитан.
+def _aware(value: datetime) -> datetime:
+    """Делает дату со смещением, чтобы наивные и UTC-даты можно было вычитать."""
+    if value.tzinfo is None:
+        return value.astimezone()
+    return value
 
-    Порядок: совпадающие валюты (1.0), прямая запись, обратная запись,
-    затем перекрёстный курс через USD. None — посчитать нельзя.
+
+def get_rate_info(from_currency: str, to_currency: str) -> dict | None:
+    """Курс FROM→TO и время, с которого он посчитан.
+
+    Сначала обе валюты ищутся в реестре. Одинаковые валюты дают 1.0.
+    Дальше прямая запись, обратная и перекрёстный курс через USD.
     """
+    from .models import get_currency
+
     from_code = from_currency.strip().upper()
     to_code = to_currency.strip().upper()
     if not from_code or not to_code:
         return None
+    get_currency(from_code)
+    get_currency(to_code)
     if from_code == to_code:
         return {"rate": 1.0, "updated_at": None}
 
-    rates = load_rates()
-    direct = _rate_entry(rates, from_code, to_code)
+    pairs = load_rates().get("pairs", {})
+    direct = _rate_entry(pairs, from_code, to_code)
     if direct is not None:
         return {"rate": direct[0], "updated_at": direct[1]}
 
-    reverse = _rate_entry(rates, to_code, from_code)
+    reverse = _rate_entry(pairs, to_code, from_code)
     if reverse is not None:
         return {"rate": 1.0 / reverse[0], "updated_at": reverse[1]}
 
@@ -122,10 +142,7 @@ def get_rate_info(from_currency: str, to_currency: str) -> dict | None:
 
 
 def get_rate_value(from_currency: str, to_currency: str) -> float | None:
-    """
-    Возвращает числовое значение курса FROM→TO или None, если его нет.
-    Одинаковые валюты дают 1.0, в том числе USD→USD.
-    """
+    """Число курса FROM→TO или None, если посчитать нельзя."""
     info = get_rate_info(from_currency, to_currency)
     if info is None:
         return None
@@ -133,14 +150,14 @@ def get_rate_value(from_currency: str, to_currency: str) -> float | None:
 
 
 def rate_is_fresh(updated_at: str | None, now: datetime | None = None) -> bool:
-    """True, если метки нет (курс 1.0) или она не старше RATE_TTL_SECONDS."""
+    """True, если метки нет или она не старше RATE_TTL_SECONDS."""
     if not updated_at:
         return True
     try:
-        updated = datetime.fromisoformat(updated_at)
+        updated = _aware(datetime.fromisoformat(updated_at))
     except ValueError:
         return False
-    current = now or datetime.now()
+    current = _aware(now or datetime.now().astimezone())
     return (current - updated).total_seconds() <= RATE_TTL_SECONDS
 
 

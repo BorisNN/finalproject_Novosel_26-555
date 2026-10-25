@@ -11,6 +11,7 @@ uv sync
 uv run python main.py
 ```
 
+Ту же программу открывает `uv run valutatrade-hub`.
 Команда `help` показывает список команд, `exit` закрывает программу.
 
 ## Пример
@@ -29,11 +30,13 @@ logout
 exit
 ```
 
+`update-rate` записывает курс вручную, интернет для этого не нужен.
+
 ## Курсы из интернета
 
 `update-rates` берёт BTC, ETH и SOL с CoinGecko, а EUR, GBP и RUB с ExchangeRate-API.
 
-Для второго сайта нужен ключ. В корне создай файл `.env`:
+Для второго сайта нужен ключ. В корне создай файл `.env` по образцу `.env.example`:
 
 ```text
 EXCHANGERATE_API_KEY=ключ
@@ -41,16 +44,35 @@ EXCHANGERATE_API_KEY=ключ
 
 Файл `.env` в Git не добавляй. Без ключа CoinGecko всё равно запрашивается, фиатные курсы — нет.
 
+Курсы лежат в локальном кеше `data/rates.json` в виде `{"pairs": ..., "last_refresh": ...}`.
+Каждое сохранение дописывает снимок в `data/exchange_rates.json`. Оба файла в Git не входят.
+Срок актуальности курса — 3600 секунд. Его проверяют `get-rate`, `buy` и `sell`.
+`show-rates --top N` показывает N самых дорогих криптовалют.
+`show-rates --base EUR` пересчитывает пары в евро.
+
 ## Файлы
 
 - `data/users.json` — пользователи. Пароль хранится как хеш, не открытым текстом.
 - `data/portfolios.json` — кошельки.
-- `data/rates.json` — курсы.
-- `logs/app.log` — журнал.
+- `data/rates.json` — текущий кеш курсов.
+- `data/exchange_rates.json` — история курсов.
+- `logs/app.log` — журнал. Файл обрезается по размеру, хранятся 3 старые копии.
 
 Сами JSON и логи в Git не входят.
 
+## Структура
+
+- `main.py` — запуск
+- `valutatrade_hub/core/` — валюты, модели, операции, исключения
+- `valutatrade_hub/cli/` — разбор команд
+- `valutatrade_hub/parser_service/` — клиенты API, обновление и хранение курсов
+- `valutatrade_hub/infra/` — SettingsLoader и DatabaseManager
+- `valutatrade_hub/decorators.py` — журнал действий `@log_action`
+- `valutatrade_hub/logging_config.py` — консоль и файл с ротацией
+
 ## Демонстрация
+
 https://asciinema.org/a/tD2cDgbz0NgiPTug
 
 или `demo/valutatrade_hub_demo.cast`
+

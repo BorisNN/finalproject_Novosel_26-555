@@ -2,24 +2,28 @@
 
 
 class ValutaTradeError(Exception):
-    """Базовое исключение проекта."""
+    """Базовая ошибка приложения. Её текст можно показать пользователю."""
 
 
 class ValidationError(ValutaTradeError):
-    """Ошибка валидации входных данных."""
+    """Неверные данные в команде или в модели."""
 
 
 class UserError(ValutaTradeError):
-    """Ошибки, связанные с пользователями (регистрация, вход)."""
+    """Пользователь не найден, уже существует или неверный пароль."""
 
 
 class InsufficientFundsError(ValutaTradeError):
-    """Недостаточно средств на счёте."""
+    """Не хватает средств для операции."""
 
 
 class RateUnavailableError(ValutaTradeError):
-    """Курс валюты недоступен."""
+    """Курс недоступен или устарел."""
 
 
 class AuthRequiredError(ValutaTradeError):
-    """Операция требует авторизации."""
+    """Команда доступна только после входа."""
+
+
+class CurrencyNotFoundError(ValutaTradeError):
+    """Кода нет в реестре валют."""

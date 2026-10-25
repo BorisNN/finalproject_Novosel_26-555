@@ -1,9 +1,81 @@
-"""Модели предметной области: пользователи, кошельки, портфели."""
+"""Модели предметной области: валюты, пользователи, кошельки, портфели."""
 
 import hashlib
 import math
 import secrets
 from datetime import datetime
+
+from .exceptions import CurrencyNotFoundError
+
+
+class Currency:
+    """Базовая валюта реестра."""
+
+    def __init__(self, code: str, name: str) -> None:
+        self._code = code.strip().upper()
+        self._name = name
+
+    @property
+    def code(self) -> str:
+        return self._code
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def is_crypto(self) -> bool:
+        return False
+
+
+class FiatCurrency(Currency):
+    """Фиатная валюта: USD, EUR, GBP, RUB."""
+
+
+class CryptoCurrency(Currency):
+    """Криптовалюта. coin_id нужен для запроса к CoinGecko."""
+
+    def __init__(self, code: str, name: str, coin_id: str) -> None:
+        super().__init__(code, name)
+        self._coin_id = coin_id
+
+    @property
+    def coin_id(self) -> str:
+        return self._coin_id
+
+    @property
+    def is_crypto(self) -> bool:
+        return True
+
+
+_REGISTRY: dict[str, Currency] = {
+    "USD": FiatCurrency("USD", "US Dollar"),
+    "EUR": FiatCurrency("EUR", "Euro"),
+    "GBP": FiatCurrency("GBP", "British Pound"),
+    "RUB": FiatCurrency("RUB", "Russian Ruble"),
+    "BTC": CryptoCurrency("BTC", "Bitcoin", "bitcoin"),
+    "ETH": CryptoCurrency("ETH", "Ethereum", "ethereum"),
+    "SOL": CryptoCurrency("SOL", "Solana", "solana"),
+}
+
+
+def get_currency(code: str) -> Currency:
+    """Фабрика: код из реестра или CurrencyNotFoundError."""
+    if not code or not str(code).strip():
+        raise CurrencyNotFoundError("Код валюты не указан")
+    key = str(code).strip().upper()
+    currency = _REGISTRY.get(key)
+    if currency is None:
+        raise CurrencyNotFoundError(f"Валюта '{key}' не найдена")
+    return currency
+
+
+def is_crypto_code(code: str) -> bool:
+    """True, если код есть в реестре и это криптовалюта."""
+    try:
+        return get_currency(code).is_crypto
+    except CurrencyNotFoundError:
+        return False
 
 
 class User:
@@ -22,8 +94,6 @@ class User:
         self._hashed_password = hashed_password
         self._salt = salt
         self._registration_date = registration_date
-
-    # геттеры и сеттеры
 
     @property
     def user_id(self) -> int:
@@ -50,8 +120,6 @@ class User:
     @property
     def registration_date(self) -> datetime:
         return self._registration_date
-
-    # методы
 
     def get_user_info(self) -> str:
         """Возвращает информацию о пользователе без пароля."""
@@ -138,24 +206,28 @@ class Wallet:
 class Portfolio:
     """Портфель пользователя — набор кошельков разных валют."""
 
-    def __init__(self, user_id: int) -> None:
-        self._user_id = user_id
+    def __init__(self, user: User) -> None:
+        if not isinstance(user, User):
+            raise TypeError("Портфель создаётся только с объектом User")
+        self._user = user
         self._wallets: dict[str, Wallet] = {}
 
     @property
+    def user(self) -> User:
+        return self._user
+
+    @property
     def user_id(self) -> int:
-        return self._user_id
+        return self._user.user_id
 
     @property
     def wallets(self) -> dict[str, Wallet]:
-        # Возвращаем копию, чтобы снаружи не ломали внутренний словарь
+        """Копия словаря, чтобы снаружи не меняли внутреннее хранилище."""
         return self._wallets.copy()
 
     def add_currency(self, currency_code: str) -> Wallet:
         """Добавляет новый кошелёк, если такой валюты ещё нет."""
-        if not currency_code or not currency_code.strip():
-            raise ValueError("Код валюты не может быть пустым")
-        code = currency_code.strip().upper()
+        code = get_currency(currency_code).code
         if code in self._wallets:
             raise ValueError(f"Кошелёк {code} уже есть в портфеле")
         wallet = Wallet(code, 0.0)
@@ -169,11 +241,11 @@ class Portfolio:
         return self._wallets.get(currency_code.strip().upper())
 
     def get_total_value(self, base_currency: str = "USD") -> float:
-        """Считает общую стоимость всех кошельков в базовой валюте по rates.json."""
+        """Считает общую стоимость всех кошельков в базовой валюте."""
         from .exceptions import RateUnavailableError
         from .utils import get_rate_value
 
-        base = base_currency.strip().upper() if base_currency else "USD"
+        base = get_currency(base_currency).code
         total = 0.0
         missing: list[str] = []
 
@@ -188,7 +260,5 @@ class Portfolio:
 
         if missing:
             codes = ", ".join(missing)
-            raise RateUnavailableError(
-                f"Не удалось получить курс для {codes}→{base}"
-            )
+            raise RateUnavailableError(f"Не удалось получить курс для {codes}→{base}")
         return total

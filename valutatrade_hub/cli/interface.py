@@ -133,7 +133,8 @@ def handle_command(line: str) -> str:
                     top = int(top_str)
                 except ValueError:
                     return "'top' должен быть целым числом"
-            return show_rates(currency, top)
+            base = args.get("base", "")
+            return show_rates(currency or None, top, base or None)
 
         elif cmd == "update-rate":
             from_cur = args.get("from", "")
@@ -165,7 +166,7 @@ def handle_command(line: str) -> str:
                 "  buy --currency CODE --amount NUMBER\n"
                 "  sell --currency CODE --amount NUMBER\n"
                 "  get-rate --from CODE --to CODE\n"
-                "  show-rates [--currency CODE] [--top N]\n"
+                "  show-rates [--currency CODE] [--top N] [--base USD]\n"
                 "  update-rate --from CODE --to CODE --rate NUMBER\n"
                 "  update-rates [--source coingecko|exchangerate]\n"
                 "  exit"
