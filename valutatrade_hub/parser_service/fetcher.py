@@ -3,6 +3,6 @@
 from .updater import RatesUpdater
 
 
-def fetch_and_update_rates() -> str:
+def fetch_and_update_rates(source: str | None = None) -> str:
     updater = RatesUpdater()
-    return updater.update()
+    return updater.update(source)

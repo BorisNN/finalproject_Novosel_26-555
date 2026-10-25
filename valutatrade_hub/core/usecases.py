@@ -1,23 +1,41 @@
 """Бизнес-логика: регистрация, вход, операции с портфелем."""
 
-from datetime import datetime
+import math
 import secrets
+from datetime import datetime
 
 from ..logging_config import get_logger
 from .exceptions import (
-    ValidationError,
-    UserError,
+    AuthRequiredError,
     InsufficientFundsError,
     RateUnavailableError,
-    AuthRequiredError,
+    UserError,
+    ValidationError,
 )
-from .models import User, Portfolio, Wallet
+from .models import Portfolio, User, Wallet
 from .utils import (
-    load_users, save_users, load_portfolios, save_portfolios,
-    load_rates, save_rates, get_rate_value,
+    format_updated_at,
+    get_rate_info,
+    get_rate_value,
+    load_portfolios,
+    load_rates,
+    load_users,
+    rate_is_fresh,
+    save_portfolios,
+    save_rates,
+    save_users,
 )
 
 logger = get_logger(__name__)
+
+
+def _positive_number(value: object, name: str) -> float:
+    """Отклоняет bool, NaN, бесконечность и неположительные числа."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValidationError(f"'{name}' должен быть положительным числом")
+    if not math.isfinite(value) or value <= 0:
+        raise ValidationError(f"'{name}' должен быть положительным числом")
+    return float(value)
 
 
 def register_user(username: str, password: str) -> str:
@@ -153,9 +171,15 @@ def show_portfolio(user: User, base_currency: str = "USD") -> str:
     total = 0.0
 
     for code, wallet in sorted(portfolio.wallets.items()):
+        if wallet.balance == 0:
+            lines.append(f"- {code}: {wallet.balance:.4f} → 0.00 {base}")
+            continue
         rate = get_rate_value(code, base)
         if rate is None:
-            rate = 0.0
+            raise RateUnavailableError(
+                f"Не удалось получить курс для {code}→{base}. "
+                "Задайте курс командой update-rate или укажите другую --base."
+            )
         value = wallet.balance * rate
         total += value
         lines.append(f"- {code}: {wallet.balance:.4f} → {value:.2f} {base}")
@@ -174,8 +198,7 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
         raise AuthRequiredError("Сначала выполните login")
     if not currency or not currency.strip():
         raise ValidationError("Нужно указать код валюты")
-    if not isinstance(amount, (int, float)) or amount <= 0:
-        raise ValidationError("'amount' должен быть положительным числом")
+    amount = _positive_number(amount, "amount")
 
     code = currency.strip().upper()
     if code == "USD":
@@ -226,8 +249,7 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
         raise AuthRequiredError("Сначала выполните login")
     if not currency or not currency.strip():
         raise ValidationError("Нужно указать код валюты")
-    if not isinstance(amount, (int, float)) or amount <= 0:
-        raise ValidationError("'amount' должен быть положительным числом")
+    amount = _positive_number(amount, "amount")
 
     code = currency.strip().upper()
     if code == "USD":
@@ -279,17 +301,26 @@ def get_rate(from_currency: str, to_currency: str) -> str:
     from_code = from_currency.strip().upper()
     to_code = to_currency.strip().upper()
 
-    rate = get_rate_value(from_code, to_code)
-    if rate is None:
-        raise RateUnavailableError(f"Курс {from_code}→{to_code} недоступен. Повторите попытку позже.")
+    info = get_rate_info(from_code, to_code)
+    if info is None:
+        raise RateUnavailableError(
+            f"Курс {from_code}→{to_code} недоступен. Повторите попытку позже."
+        )
 
-    reverse = get_rate_value(to_code, from_code)
-    if reverse is None and rate > 0:
-        reverse = 1.0 / rate
+    updated = info.get("updated_at")
+    if not rate_is_fresh(updated):
+        shown = format_updated_at(updated)
+        raise RateUnavailableError(
+            f"Курс {from_code}→{to_code} устарел (обновлено: {shown}). "
+            "Выполните update-rates или update-rate."
+        )
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    rate = info["rate"]
+    reverse_info = get_rate_info(to_code, from_code)
+    reverse = reverse_info["rate"] if reverse_info else (1.0 / rate if rate > 0 else None)
+    shown = format_updated_at(updated) if updated else datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return (
-        f"Курс {from_code}→{to_code}: {rate:.8f} (обновлено: {now})\n"
+        f"Курс {from_code}→{to_code}: {rate:.8f} (обновлено: {shown})\n"
         f"Обратный курс {to_code}→{from_code}: {reverse:.8f}"
     )
 
@@ -303,8 +334,7 @@ def deposit(user: User, currency: str, amount: float) -> str:
         raise AuthRequiredError("Сначала выполните login")
     if not currency or not currency.strip():
         raise ValidationError("Нужно указать код валюты")
-    if not isinstance(amount, (int, float)) or amount <= 0:
-        raise ValidationError("'amount' должен быть положительным числом")
+    amount = _positive_number(amount, "amount")
 
     code = currency.strip().upper()
     portfolio = load_portfolio(user.user_id)
@@ -323,22 +353,43 @@ def deposit(user: User, currency: str, amount: float) -> str:
         f"{code}: было {old_balance:.4f} → стало {wallet.balance:.4f}"
     )
 
-def show_rates() -> str:
-    """Показывает все курсы из rates.json."""
+def show_rates(currency: str | None = None, top: int | None = None) -> str:
+    """Показывает курсы из rates.json. Можно сузить по валюте и взять top N."""
     rates = load_rates()
     if not rates:
         return "Курсы не загружены."
 
-    lines = ["Текущие курсы:"]
+    code_filter = currency.strip().upper() if currency else ""
+    items: list[tuple[str, dict]] = []
     for key, value in rates.items():
         if key in ("source", "last_refresh"):
             continue
-        if isinstance(value, dict) and "rate" in value:
-            updated = value.get("updated_at", "неизвестно")
-            lines.append(f"- {key}: {value['rate']} (обновлено: {updated})")
+        if not isinstance(value, dict) or "rate" not in value:
+            continue
+        if code_filter:
+            left, _, right = key.partition("_")
+            if code_filter not in (left, right):
+                continue
+        items.append((key, value))
+
+    if top is not None:
+        if isinstance(top, bool) or not isinstance(top, int) or top <= 0:
+            raise ValidationError("'top' должен быть положительным целым числом")
+        items.sort(key=lambda item: float(item[1]["rate"]), reverse=True)
+        items = items[:top]
+
+    if not items:
+        if code_filter:
+            return f"Курсы для {code_filter} не найдены."
+        return "Курсы не загружены."
+
+    lines = ["Текущие курсы:"]
+    for key, value in items:
+        updated = format_updated_at(value.get("updated_at"))
+        lines.append(f"- {key}: {value['rate']} (обновлено: {updated})")
 
     source = rates.get("source", "неизвестно")
-    last = rates.get("last_refresh", "неизвестно")
+    last = format_updated_at(rates.get("last_refresh")) if rates.get("last_refresh") else "неизвестно"
     lines.append(f"Источник: {source}")
     lines.append(f"Последнее обновление: {last}")
     return "\n".join(lines)
@@ -351,8 +402,7 @@ def update_rate(from_currency: str, to_currency: str, new_rate: float) -> str:
     """
     if not from_currency or not to_currency:
         raise ValidationError("Нужно указать обе валюты")
-    if not isinstance(new_rate, (int, float)) or new_rate <= 0:
-        raise ValidationError("Курс должен быть положительным числом")
+    new_rate = _positive_number(new_rate, "rate")
 
     from_code = from_currency.strip().upper()
     to_code = to_currency.strip().upper()

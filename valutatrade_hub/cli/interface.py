@@ -2,21 +2,20 @@
 
 import shlex
 
+from ..core.exceptions import ValutaTradeError
+from ..core.models import User
 from ..core.usecases import (
-    register_user,
-    login_user,
-    show_portfolio,
     buy_currency,
-    sell_currency,
-    get_rate,
     deposit,
+    get_rate,
+    login_user,
+    register_user,
+    sell_currency,
+    show_portfolio,
     show_rates,
     update_rate,
 )
-from ..core.models import User
-from ..core.exceptions import ValutaTradeError
 from ..parser_service.fetcher import fetch_and_update_rates
-
 
 # Текущая сессия (пока просто переменная в памяти)
 current_user: User | None = None
@@ -126,7 +125,15 @@ def handle_command(line: str) -> str:
             return get_rate(from_cur, to_cur)
 
         elif cmd == "show-rates":
-            return show_rates()
+            currency = args.get("currency", "")
+            top = None
+            top_str = args.get("top", "")
+            if top_str:
+                try:
+                    top = int(top_str)
+                except ValueError:
+                    return "'top' должен быть целым числом"
+            return show_rates(currency, top)
 
         elif cmd == "update-rate":
             from_cur = args.get("from", "")
@@ -141,7 +148,8 @@ def handle_command(line: str) -> str:
             return update_rate(from_cur, to_cur, new_rate)
 
         elif cmd == "update-rates":
-            return fetch_and_update_rates()
+            source = args.get("source", "")
+            return fetch_and_update_rates(source or None)
 
         elif cmd in ("exit", "quit"):
             return "exit"
@@ -157,11 +165,10 @@ def handle_command(line: str) -> str:
                 "  buy --currency CODE --amount NUMBER\n"
                 "  sell --currency CODE --amount NUMBER\n"
                 "  get-rate --from CODE --to CODE\n"
-                "  show-rates\n"
+                "  show-rates [--currency CODE] [--top N]\n"
                 "  update-rate --from CODE --to CODE --rate NUMBER\n"
-                "  update-rates\n"
+                "  update-rates [--source coingecko|exchangerate]\n"
                 "  exit"
-                
             )
 
         else:
@@ -169,9 +176,9 @@ def handle_command(line: str) -> str:
 
     except ValutaTradeError as e:
         return str(e)
-    except ValueError as e:
+    except (ValueError, TypeError) as e:
         return str(e)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         return f"Ошибка: {e}"
 
 

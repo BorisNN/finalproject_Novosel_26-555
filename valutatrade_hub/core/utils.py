@@ -1,15 +1,20 @@
 """Вспомогательные функции: работа с JSON-файлами и простые утилиты."""
 
 import json
+import math
+from datetime import datetime
 from pathlib import Path
 from typing import Any
-
 
 # Пути относительно корня проекта
 DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data"
 USERS_FILE = DATA_DIR / "users.json"
 PORTFOLIOS_FILE = DATA_DIR / "portfolios.json"
 RATES_FILE = DATA_DIR / "rates.json"
+
+# Курс старше этого срока считается устаревшим в команде get-rate.
+# В тексте задания точное число не было, поэтому одна константа: 1 час.
+RATE_TTL_SECONDS = 3600
 
 
 def load_json(path: Path, default: Any = None) -> Any:
@@ -58,23 +63,89 @@ def save_rates(rates: dict) -> None:
     save_json(RATES_FILE, rates)
 
 
+def _positive_rate(value: Any) -> float | None:
+    """Возвращает курс, только если это конечное положительное число."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    if not math.isfinite(value) or value <= 0:
+        return None
+    return float(value)
+
+
+def _rate_entry(rates: dict, from_code: str, to_code: str) -> tuple[float, str | None] | None:
+    """Прямая запись FROM_TO из rates.json."""
+    item = rates.get(f"{from_code}_{to_code}")
+    if not isinstance(item, dict):
+        return None
+    rate = _positive_rate(item.get("rate"))
+    if rate is None:
+        return None
+    updated = item.get("updated_at")
+    return rate, updated if isinstance(updated, str) else None
+
+
+def get_rate_info(from_currency: str, to_currency: str) -> dict | None:
+    """
+    Курс FROM→TO и время, с которого он посчитан.
+
+    Порядок: совпадающие валюты (1.0), прямая запись, обратная запись,
+    затем перекрёстный курс через USD. None — посчитать нельзя.
+    """
+    from_code = from_currency.strip().upper()
+    to_code = to_currency.strip().upper()
+    if not from_code or not to_code:
+        return None
+    if from_code == to_code:
+        return {"rate": 1.0, "updated_at": None}
+
+    rates = load_rates()
+    direct = _rate_entry(rates, from_code, to_code)
+    if direct is not None:
+        return {"rate": direct[0], "updated_at": direct[1]}
+
+    reverse = _rate_entry(rates, to_code, from_code)
+    if reverse is not None:
+        return {"rate": 1.0 / reverse[0], "updated_at": reverse[1]}
+
+    if "USD" in (from_code, to_code):
+        return None
+
+    left = get_rate_info(from_code, "USD")
+    right = get_rate_info(to_code, "USD")
+    if left is None or right is None or right["rate"] <= 0:
+        return None
+    stamps = [item["updated_at"] for item in (left, right) if item.get("updated_at")]
+    return {
+        "rate": left["rate"] / right["rate"],
+        "updated_at": min(stamps) if stamps else None,
+    }
+
+
 def get_rate_value(from_currency: str, to_currency: str) -> float | None:
     """
     Возвращает числовое значение курса FROM→TO или None, если его нет.
-    Поддерживает прямой и обратный курс.
+    Одинаковые валюты дают 1.0, в том числе USD→USD.
     """
-    rates = load_rates()
-    from_code = from_currency.strip().upper()
-    to_code = to_currency.strip().upper()
+    info = get_rate_info(from_currency, to_currency)
+    if info is None:
+        return None
+    return info["rate"]
 
-    direct_key = f"{from_code}_{to_code}"
-    if direct_key in rates and isinstance(rates[direct_key], dict):
-        return rates[direct_key].get("rate")
 
-    reverse_key = f"{to_code}_{from_code}"
-    if reverse_key in rates and isinstance(rates[reverse_key], dict):
-        reverse = rates[reverse_key].get("rate")
-        if reverse and reverse > 0:
-            return 1.0 / reverse
+def rate_is_fresh(updated_at: str | None, now: datetime | None = None) -> bool:
+    """True, если метки нет (курс 1.0) или она не старше RATE_TTL_SECONDS."""
+    if not updated_at:
+        return True
+    try:
+        updated = datetime.fromisoformat(updated_at)
+    except ValueError:
+        return False
+    current = now or datetime.now()
+    return (current - updated).total_seconds() <= RATE_TTL_SECONDS
 
-    return None
+
+def format_updated_at(updated_at: str | None) -> str:
+    """Показывает сохранённое время, а не текущие часы."""
+    if not updated_at:
+        return "неизвестно"
+    return updated_at.replace("T", " ")

@@ -1,9 +1,9 @@
 """Модели предметной области: пользователи, кошельки, портфели."""
 
-from datetime import datetime
 import hashlib
+import math
 import secrets
-from typing import Dict
+from datetime import datetime
 
 
 class User:
@@ -101,21 +101,27 @@ class Wallet:
 
     @balance.setter
     def balance(self, value: float) -> None:
-        if not isinstance(value, (int, float)):
-            raise ValueError("Баланс должен быть числом")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError("Баланс должен быть числом")
+        if not math.isfinite(value):
+            raise ValueError("Баланс должен быть конечным числом")
         if value < 0:
             raise ValueError("Баланс не может быть отрицательным")
         self._balance = float(value)
 
     def deposit(self, amount: float) -> None:
         """Пополняет баланс. Сумма должна быть положительной."""
-        if not isinstance(amount, (int, float)) or amount <= 0:
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+            raise TypeError("Сумма пополнения должна быть положительным числом")
+        if not math.isfinite(amount) or amount <= 0:
             raise ValueError("Сумма пополнения должна быть положительным числом")
         self.balance += amount
 
     def withdraw(self, amount: float) -> None:
         """Снимает деньги, если их хватает."""
-        if not isinstance(amount, (int, float)) or amount <= 0:
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+            raise TypeError("Сумма снятия должна быть положительным числом")
+        if not math.isfinite(amount) or amount <= 0:
             raise ValueError("Сумма снятия должна быть положительным числом")
         if amount > self.balance:
             raise ValueError(
@@ -134,14 +140,14 @@ class Portfolio:
 
     def __init__(self, user_id: int) -> None:
         self._user_id = user_id
-        self._wallets: Dict[str, Wallet] = {}
+        self._wallets: dict[str, Wallet] = {}
 
     @property
     def user_id(self) -> int:
         return self._user_id
 
     @property
-    def wallets(self) -> Dict[str, Wallet]:
+    def wallets(self) -> dict[str, Wallet]:
         # Возвращаем копию, чтобы снаружи не ломали внутренний словарь
         return self._wallets.copy()
 
@@ -164,20 +170,25 @@ class Portfolio:
 
     def get_total_value(self, base_currency: str = "USD") -> float:
         """Считает общую стоимость всех кошельков в базовой валюте по rates.json."""
+        from .exceptions import RateUnavailableError
         from .utils import get_rate_value
 
         base = base_currency.strip().upper() if base_currency else "USD"
         total = 0.0
+        missing: list[str] = []
 
         for code, wallet in self._wallets.items():
             if wallet.balance == 0:
                 continue
-            if code == base:
-                total += wallet.balance
-                continue
             rate = get_rate_value(code, base)
             if rate is None:
+                missing.append(code)
                 continue
             total += wallet.balance * rate
 
+        if missing:
+            codes = ", ".join(missing)
+            raise RateUnavailableError(
+                f"Не удалось получить курс для {codes}→{base}"
+            )
         return total

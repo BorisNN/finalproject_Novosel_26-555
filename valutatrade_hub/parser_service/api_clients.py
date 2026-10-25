@@ -1,21 +1,20 @@
 """Клиенты для внешних API курсов."""
 
-import requests
 from abc import ABC, abstractmethod
+
+import requests
 
 from .config import ParserConfig
 
 
 class ApiRequestError(Exception):
     """Ошибка при запросе к внешнему API."""
-    pass
 
 
 class BaseApiClient(ABC):
     @abstractmethod
     def fetch_rates(self) -> dict:
         """Возвращает словарь вида {'BTC_USD': 60000.0, ...}."""
-        pass
 
 
 class CoinGeckoClient(BaseApiClient):
