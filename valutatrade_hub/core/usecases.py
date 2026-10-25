@@ -8,6 +8,9 @@ from .utils import (
     load_users, save_users, load_portfolios, save_portfolios,
     load_rates, save_rates, get_rate_value,
 )
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def register_user(username: str, password: str) -> str:
@@ -46,6 +49,7 @@ def register_user(username: str, password: str) -> str:
     portfolios.append({"user_id": user_id, "wallets": {}})
     save_portfolios(portfolios)
 
+    logger.info("Зарегистрирован пользователь %s (id=%s)", username, user_id)
     return (
         f"Пользователь '{username}' зарегистрирован (id={user_id}). "
         f"Войдите: login --username {username} --password ****"
@@ -87,6 +91,7 @@ def login_user(username: str, password: str) -> User:
     if not user.verify_password(password):
         raise ValueError("Неверный пароль")
 
+    logger.info("Пользователь %s вошёл в систему", username)
     return user
 
 
@@ -195,6 +200,7 @@ def buy_currency(user: User, currency: str, amount: float) -> str:
     wallet.deposit(amount)
     save_portfolio(portfolio)
 
+    logger.info("Пользователь %s купил %.4f %s за %.2f USD", user.username, amount, code, cost)
     return (
         f"Покупка выполнена: {amount:.4f} {code} по курсу {rate:.2f} USD/{code}\n"
         f"Изменения в портфеле:\n"
@@ -246,6 +252,7 @@ def sell_currency(user: User, currency: str, amount: float) -> str:
 
     save_portfolio(portfolio)
 
+    logger.info("Пользователь %s продал %.4f %s за %.2f USD", user.username, amount, code, revenue)
     return (
         f"Продажа выполнена: {amount:.4f} {code} по курсу {rate:.2f} USD/{code}\n"
         f"Изменения в портфеле:\n"
@@ -331,6 +338,7 @@ def deposit(user: User, currency: str, amount: float) -> str:
     wallet.deposit(amount)
     save_portfolio(portfolio)
 
+    logger.info("Пользователь %s пополнил %s на %.4f", user.username, code, amount)
     return (
         f"Пополнение выполнено: +{amount:.4f} {code}\n"
         f"{code}: было {old_balance:.4f} → стало {wallet.balance:.4f}"

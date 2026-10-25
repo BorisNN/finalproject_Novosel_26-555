@@ -5,7 +5,9 @@ from datetime import datetime
 from ..core.utils import load_rates, save_rates
 from .api_clients import CoinGeckoClient, ExchangeRateApiClient, ApiRequestError
 from .config import ParserConfig
+from ..logging_config import get_logger
 
+logger = get_logger(__name__)
 
 class RatesUpdater:
     def __init__(self):
@@ -41,4 +43,5 @@ class RatesUpdater:
         rates["last_refresh"] = now
         save_rates(rates)
 
+        logger.info("Обновление курсов завершено: %s", "; ".join(messages))
         return "Обновление завершено: " + "; ".join(messages)
