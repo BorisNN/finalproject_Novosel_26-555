@@ -49,3 +49,8 @@ EXCHANGERATE_API_KEY=ключ
 - `logs/app.log` — журнал.
 
 Сами JSON и логи в Git не входят.
+
+## Демонстрация
+https://asciinema.org/a/tD2cDgbz0NgiPTug
+
+или `demo/valutatrade_hub_demo.cast`
