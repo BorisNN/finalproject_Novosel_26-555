@@ -132,17 +132,6 @@ class Wallet:
 class Portfolio:
     """Портфель пользователя — набор кошельков разных валют."""
 
-    # Временные фиксированные курсы (пока нет парсера).
-    # Ключ — "FROM_TO", значение — сколько единиц TO даёт 1 единица FROM.
-    # Пример: 1 BTC = 60000 USD, 1 EUR = 1.08 USD.
-    _FAKE_RATES: Dict[str, float] = {
-        "BTC_USD": 60000.0,
-        "ETH_USD": 3500.0,
-        "EUR_USD": 1.08,
-        "RUB_USD": 0.011,
-        "USD_USD": 1.0,
-    }
-
     def __init__(self, user_id: int) -> None:
         self._user_id = user_id
         self._wallets: Dict[str, Wallet] = {}
@@ -174,19 +163,20 @@ class Portfolio:
         return self._wallets.get(currency_code.strip().upper())
 
     def get_total_value(self, base_currency: str = "USD") -> float:
-        """Считает общую стоимость всех кошельков в базовой валюте."""
+        """Считает общую стоимость всех кошельков в базовой валюте по rates.json."""
+        from .utils import get_rate_value
+
         base = base_currency.strip().upper() if base_currency else "USD"
         total = 0.0
 
         for code, wallet in self._wallets.items():
             if wallet.balance == 0:
                 continue
-            # Курс вида CODE_BASE
-            rate_key = f"{code}_{base}"
-            rate = self._FAKE_RATES.get(rate_key)
+            if code == base:
+                total += wallet.balance
+                continue
+            rate = get_rate_value(code, base)
             if rate is None:
-                # Если прямого курса нет — пока просто пропускаем
-                # (позже подключим нормальный сервис курсов)
                 continue
             total += wallet.balance * rate
 
