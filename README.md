@@ -42,7 +42,7 @@ exit
 EXCHANGERATE_API_KEY=ключ
 ```
 
-Файл `.env` в Git не добавляй. Без ключа CoinGecko всё равно запрашивается, фиатные курсы — нет.
+Файл `.env` в Git не добавлятся.
 
 Курсы лежат в локальном кеше `data/rates.json` в виде `{"pairs": ..., "last_refresh": ...}`.
 Каждое сохранение дописывает в `data/exchange_rates.json` отдельные измерения: id, from_currency, to_currency, rate, timestamp, source. Повтор того же id не пишется. Оба файла в Git не входят.
